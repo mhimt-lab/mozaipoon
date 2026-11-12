@@ -20,7 +20,7 @@
 
 - **アップロードなし・ログインなし・通信なし**。アプリにも CLI にもネットワーク通信の処理はない
 - 顔の検出・人のまとめ・モザイク・書き出しは、macOS 標準の Vision（顔検出・特徴量）・Core Image（モザイク）・AVFoundation（読み書き）だけで、すべてこの Mac の中で行う。クラウドの AI サービスには送らない
-- 登録した顔写真は `~/Library/Application Support/WipeMosaic/faces/` に、設定は UserDefaults に保存するだけで、どこにも送らない
+- 登録した顔写真と設定は、この Mac の中に保存するだけで、どこにも送らない（顔写真の保存場所は `~/Library/Application Support/WipeMosaic/faces/`）
 
 街中やイベントで撮った動画の通行人、行事や社内向けの動画に映った人など、「この人の顔だけ隠したい」ときに使う。
 
