@@ -66,10 +66,10 @@ macOS（AVFoundation）で読める形式はそのまま開ける。2026-11-12 �
 
 `scripts/build-app.sh --zip` で、Apple シリコンと Intel の両方で動くアプリ（ad-hoc 署名）と `build/Mozaipoon-<版>.zip` ができる。版は `scripts/build-app.sh` の `VERSION`。zip は拡張属性を含めずに作る。
 
-```sh
-bash scripts/build-app.sh --zip
-gh release create v1.0 build/Mozaipoon-1.0.zip --title "モザイぷーん 1.0" --notes-file <リリースノート>
-```
+公開は GitHub Actions（`.github/workflows/release.yml`）で行う。リリースの作成者を個人のアカウントではなく `github-actions[bot]` にするため、手元から `gh release create` しない。
+
+1. `scripts/build-app.sh` の `VERSION` を上げ、`.github/release-notes/v<版>.md` にリリースノートを書いて push する
+2. `git tag v<版> && git push origin v<版>` でタグを push すると、macOS のランナーでビルドし、zip と SHA-256 を付けてリリースを作る
 
 Developer ID の署名と公証をしていないため、ダウンロードした人の Mac では初回に Gatekeeper で止まる（README に開き方を書いている）。止まらないようにするには、Apple Developer Program に登録して Developer ID で署名し、`notarytool` で公証する必要がある。
 
