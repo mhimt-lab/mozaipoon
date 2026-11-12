@@ -62,6 +62,17 @@ macOS（AVFoundation）で読める形式はそのまま開ける。2026-11-12 �
 - 処理時間の目安（1080p30、高精度、M3 Max）：顔の検索は動画の長さの約 0.6〜0.8 倍（10 秒で約 7 秒、64 秒で約 37 秒）。書き出しは H.264 で 10 秒の動画が約 2 秒
 - **公開前に、書き出し結果を必ず通しで目で確認する**
 
+## 配布用のビルドと公開
+
+`scripts/build-app.sh --zip` で、Apple シリコンと Intel の両方で動くアプリ（ad-hoc 署名）と `build/Mozaipoon-<版>.zip` ができる。版は `scripts/build-app.sh` の `VERSION`。zip は拡張属性を含めずに作る。
+
+```sh
+bash scripts/build-app.sh --zip
+gh release create v1.0 build/Mozaipoon-1.0.zip --title "モザイぷーん 1.0" --notes-file <リリースノート>
+```
+
+Developer ID の署名と公証をしていないため、ダウンロードした人の Mac では初回に Gatekeeper で止まる（README に開き方を書いている）。止まらないようにするには、Apple Developer Program に登録して Developer ID で署名し、`notarytool` で公証する必要がある。
+
 ## アイコン
 
 アイコンの元データは `assets/icon/AppIcon.svg`。変えたら `node scripts/render-icon.mjs assets/icon/AppIcon.svg assets/icon/AppIcon.png`（Playwright と Google Chrome が必要）で 1024px の PNG にし、`scripts/build-app.sh` を実行すると各サイズのアイコン（AppIcon.icns）が作られてアプリに入る。

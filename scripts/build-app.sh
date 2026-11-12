@@ -1,14 +1,18 @@
 #!/bin/zsh
-# Build "モザイぷーん.app" (ad-hoc signed, for this Mac) into ./build/.
+# Build "モザイぷーん.app" (universal: Apple silicon + Intel, ad-hoc signed) into ./build/.
+# With --zip, also write build/Mozaipoon-<version>.zip for a GitHub Release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-swift build -c release --product WipeMosaic
+ARCHS=(--arch arm64 --arch x86_64)
+swift build -c release "${ARCHS[@]}" --product WipeMosaic
+BIN=$(swift build -c release "${ARCHS[@]}" --product WipeMosaic --show-bin-path)
+VERSION=1.0
 
 APP=build/モザイぷーん.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/WipeMosaic "$APP/Contents/MacOS/WipeMosaic"
+cp "$BIN/WipeMosaic" "$APP/Contents/MacOS/WipeMosaic"
 
 # App icon: assets/icon/AppIcon.png (1024×1024, from AppIcon.svg via scripts/render-icon.mjs).
 ICONSET=$(mktemp -d)/AppIcon.iconset
@@ -20,7 +24,7 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 rm -rf "$(dirname "$ICONSET")"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -31,7 +35,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>モザイぷーん</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>NSHighResolutionCapable</key><true/>
@@ -51,4 +55,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 codesign --force --sign - "$APP"
-echo "built: $PWD/$APP"
+echo "built: $PWD/$APP ($(lipo -archs "$APP/Contents/MacOS/WipeMosaic"))"
+
+if [[ "${1:-}" == "--zip" ]]; then
+  ZIP=build/Mozaipoon-$VERSION.zip
+  rm -f "$ZIP"
+  ditto -c -k --norsrc --noextattr --keepParent "$APP" "$ZIP"
+  echo "zip: $PWD/$ZIP"
+fi

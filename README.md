@@ -24,11 +24,22 @@
 
 街中やイベントで撮った動画の通行人、行事や社内向けの動画に映った人など、「この人の顔だけ隠したい」ときに使う。
 
-## 動作環境と入手
+## 入手
 
-- macOS 26 以降
-- ビルド済みのアプリは配布していない。下の手順で自分の Mac でビルドする（Xcode は不要。Command Line Tools の Swift 6 でビルドできる）
-- MXF など AVFoundation が開けない形式を読むときだけ ffmpeg（`brew install ffmpeg`）を使う（下の「対応している動画形式」）
+**[最新版をダウンロード（Mozaipoon-1.0.zip）](https://github.com/mhimt-lab/mozaipoon/releases/latest)**
+
+- 動作環境：macOS 26 以降。Apple シリコンと Intel の両方に対応（Intel の Mac での動作はまだ確かめていない）
+- 無料・オープンソース（MIT License）
+
+1. ダウンロードした zip を開くと「モザイぷーん」が出てくる。「アプリケーション」フォルダへ移す
+2. 初めて開くときだけ、「開いていません」という警告が出て開けない。このアプリは Apple の公証（notarization）を受けていないため
+3. 「システム設定」▸「プライバシーとセキュリティ」を開き、下の方にある「このまま開く」を押す。パスワードを入れると開く。2 回目からはふつうに開ける
+
+MXF（Sony FX6/FX3 など）を開くときだけ、ffmpeg（`brew install ffmpeg`）が必要。
+
+### 自分でビルドする
+
+Xcode は不要。Command Line Tools の Swift 6 でビルドできる。
 
 ```sh
 git clone https://github.com/mhimt-lab/mozaipoon.git
@@ -36,8 +47,6 @@ cd mozaipoon
 bash scripts/build-app.sh          # アプリ: build/モザイぷーん.app
 swift build -c release             # CLI:   .build/release/wipe-mosaic
 ```
-
-アプリは `/Applications` などへコピーして使ってよい（ad-hoc 署名のローカル専用アプリ）。
 
 ## できること
 
