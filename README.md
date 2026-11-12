@@ -136,3 +136,7 @@ $B run testdata/people.mov testdata/out/p.mov --people 2 --report testdata/out/p
 $B run testdata/sample.mov testdata/out/result.mov --wipe 1480,640,400,400 --report testdata/out/report.csv --overwrite
 awk -F, 'NR>1{e=($1>=5.0)?3:2; if($2==e&&$3==1)ok++; n++} END{print "match " ok "/" n}' testdata/out/report.csv
 ```
+
+## ライセンス
+
+MIT License（`LICENSE` を参照）。
