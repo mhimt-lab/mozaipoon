@@ -1,0 +1,179 @@
+import AVFoundation
+import WipeMosaicCore
+
+private func wipeSettings(_ c: CommonOptions) -> MosaicSettings {
+    var s = MosaicSettings(wipes: c.wipes)
+    s.minInside = c.minInside
+    s.keepAllInWipe = c.keepAllInWipe
+    s.render = c.render
+    return s
+}
+
+func runMosaic(_ o: RunOptions) async throws {
+    let fm = FileManager.default
+    guard fm.fileExists(atPath: o.common.input.path) else { throw ToolError("input not found: \(o.common.input.path)") }
+    guard o.common.input.standardizedFileURL != o.output.standardizedFileURL else {
+        throw ToolError("output must differ from input")
+    }
+    let type = try fileType(for: o.output)
+    if fm.fileExists(atPath: o.output.path), !o.overwrite {
+        throw ToolError("output exists (use --overwrite): \(o.output.path)")
+    }
+
+    let asset = AVURLAsset(url: o.common.input)
+    let info = try await loadVideo(asset)
+    print("video: \(Int(info.size.width))x\(Int(info.size.height))")
+
+    let total = max(1, Int((info.fps * info.duration).rounded()))
+    var last = Date()
+    let report: (Int) -> Void = { n in
+        guard Date().timeIntervalSince(last) > (o.progress ? 0.5 : 2) else { return }
+        last = Date()
+        if o.progress {
+            print(String(format: "PROGRESS scan %.4f", min(0.99, Double(n) / Double(total))))
+        } else {
+            print("  scanned \(n) frames")
+        }
+    }
+
+    let frames: [FrameFaces]
+    var extra = ""
+    if o.common.people.isEmpty {
+        let s = wipeSettings(o.common)
+        try validateWipes(s.wipes, size: info.size)
+        print("pass 1/2: detecting faces")
+        frames = try scanFaces(asset: asset, info: info, settings: s, progress: report)
+    } else {
+        print("pass 1/2: detecting and grouping faces")
+        let v = try analyzeFaces(
+            asset: asset, info: info, tiles: o.common.render.tiles, tileInterval: o.common.render.tileInterval,
+            progress: report)
+        let missing = o.common.people.subtracting(v.people.map(\.id))
+        guard missing.isEmpty else { throw ToolError("no such person: \(missing.sorted()) (found \(v.people.count))") }
+        frames = v.frames(selected: o.common.people, endHold: o.common.render.hold)
+        extra = "  people mosaicked:             \(o.common.people.sorted()) of \(v.people.count)\n"
+    }
+    if o.progress { print("PROGRESS scan 1.0000") }
+
+    print("pass 2/2: writing")
+    if fm.fileExists(atPath: o.output.path) { try fm.removeItem(at: o.output) }  // --overwrite checked above
+    let showProgress = o.progress
+    var writeRender = o.common.render
+    if !o.common.people.isEmpty { writeRender.hold = 0 }  // already applied per person by frames()
+    let format: OutputFormat
+    do {
+        format = try await writeMosaic(
+            asset: asset, info: info, frames: frames, render: writeRender, to: o.output, fileType: type
+        ) { p in
+            if showProgress { print(String(format: "PROGRESS render %.4f", p)) }
+        }
+    } catch {
+        try? fm.removeItem(at: o.output)
+        throw error
+    }
+
+    if let report = o.report {
+        // mosaic_boxes: x:y:w:h in video pixels, top-left origin, before --pad.
+        var csv = "time_sec,mosaic_faces,other_faces,mosaic_boxes\n"
+        let h = info.size.height
+        for f in frames {
+            let boxes = f.mosaic.map { String(format: "%.0f:%.0f:%.0f:%.0f", $0.minX, h - $0.maxY, $0.width, $0.height) }
+            csv += String(format: "%.3f,%d,%d,", f.time, f.mosaic.count, f.kept.count) + boxes.joined(separator: " ") + "\n"
+        }
+        try csv.write(to: report, atomically: true, encoding: .utf8)
+        print("report: \(report.path)")
+    }
+
+    let dips = findDips(frames)
+    print("""
+        done: \(o.output.path)
+          output format:                \(format)
+          frames scanned:               \(frames.count)
+          frames with mosaicked faces:  \(frames.filter { !$0.mosaic.isEmpty }.count) (max \(frames.map(\.mosaic.count).max() ?? 0) per frame)
+          frames with other faces:      \(frames.filter { !$0.kept.isEmpty }.count)
+        \(extra)  possible misses (count dips): \(dips.count)\(dips.prefix(10).map { String(format: " %.2fs", $0.start) }.joined())
+        Review the output before publishing: detection can miss faces.
+        """)
+}
+
+func runPreview(_ o: PreviewOptions) async throws {
+    guard FileManager.default.fileExists(atPath: o.common.input.path) else {
+        throw ToolError("input not found: \(o.common.input.path)")
+    }
+    let asset = AVURLAsset(url: o.common.input)
+    let info = try await loadVideo(asset)
+    let r = try await renderPreview(asset: asset, info: info, at: o.at, settings: wipeSettings(o.common))
+    try writePNG(r.image, to: o.output)
+    print("preview: \(o.output.path) at \(String(format: "%.3f", r.time))s: \(r.mosaicCount) mosaicked, \(r.keptCount) kept")
+}
+
+func listPeople(input: URL, outDir: URL?, render: RenderSettings, photos: [URL], match: URL?) async throws {
+    let registered = try photos.map { try faceFromPhoto($0).signature }
+    guard FileManager.default.fileExists(atPath: input.path) else { throw ToolError("input not found: \(input.path)") }
+    let asset = AVURLAsset(url: input)
+    let info = try await loadVideo(asset)
+    let v = try analyzeFaces(asset: asset, info: info, tiles: render.tiles, tileInterval: render.tileInterval) { _ in }
+    var other: VideoFaces?
+    if let match {
+        guard FileManager.default.fileExists(atPath: match.path) else { throw ToolError("not found: \(match.path)") }
+        let a = AVURLAsset(url: match)
+        other = try analyzeFaces(asset: a, info: try await loadVideo(a), tiles: render.tiles, tileInterval: render.tileInterval) { _ in }
+    }
+    if let outDir { try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true) }
+    print("people: \(v.people.count) (tracks \(v.tracks.count), frames \(v.times.count))")
+    for p in v.people {
+        let first = v.times[p.firstFrame]
+        print(String(format: "  person %d: %.1fs on screen, first at %.2fs, %d track(s)", p.id, Double(p.frameCount) / max(info.fps, 1), first, p.trackIDs.count)
+            + (p.similar.isEmpty ? "" : ", maybe same as \(p.similar.map { "person \($0)" }.joined(separator: ", "))"))
+        let followed = v.tracks.filter { p.trackIDs.contains($0.id) }.flatMap(\.detections).filter(\.tracked)
+        if !followed.isEmpty {
+            print("    followed without a face: \(followed.count) frames, " + followed.map { String(format: "%.2f", v.times[$0.frame]) }.joined(separator: " ").prefix(400))
+        }
+        for (k, r) in registered.enumerated() {
+            let d = v.distances(to: r)[p.id] ?? -1
+            let hit = v.suggestions(registered: [r])[p.id] != nil
+            print(String(format: "    distance to %@: %.3f%@", photos[k].lastPathComponent, d, hit ? "  (suggested)" : ""))
+        }
+        if let other {
+            for q in other.people {
+                let d = v.distances(to: q.id, in: other)[p.id] ?? -1
+                let hit = v.matches(of: [q.id], in: other)[p.id] != nil
+                print(String(format: "    distance to other person %d: %.3f%@", q.id, d, hit ? "  (suggested)" : ""))
+            }
+        }
+        guard let outDir else { continue }
+        for (k, s) in p.samples.enumerated() {
+            let img = try await faceThumbnail(asset: asset, time: v.times[s.frame], rect: s.rect)
+            try writePNG(img, to: outDir.appendingPathComponent("person-\(p.id)-\(k + 1).png"))
+        }
+    }
+}
+
+func printFaceDistances(_ urls: [URL]) throws {
+    let faces = try urls.map { try faceFromPhoto($0) }
+    let names = urls.map { $0.deletingPathExtension().lastPathComponent }
+    print("photo," + names.joined(separator: ","))
+    for i in faces.indices {
+        let row = try faces.indices.map { j in String(format: "%.3f", try distance(faces[i].signature, faces[j].signature)) }
+        print(names[i] + "," + row.joined(separator: ","))
+    }
+}
+
+func printInfo(_ url: URL) async throws {
+    guard FileManager.default.fileExists(atPath: url.path) else { throw ToolError("input not found: \(url.path)") }
+    let info = try await loadVideo(AVURLAsset(url: url))
+    let obj: [String: Any] = [
+        "width": Int(info.size.width), "height": Int(info.size.height), "duration": info.duration, "fps": info.fps,
+    ]
+    let data = try JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])
+    print(String(decoding: data, as: UTF8.self))
+}
+
+func writeFrame(input: URL, at: Double, output: URL) async throws {
+    guard FileManager.default.fileExists(atPath: input.path) else { throw ToolError("input not found: \(input.path)") }
+    let asset = AVURLAsset(url: input)
+    _ = try await loadVideo(asset)
+    let (cg, _) = try await frameImage(asset: asset, at: at)
+    try writePNG(cg, to: output)
+}
+
