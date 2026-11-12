@@ -1,4 +1,4 @@
-# モザイぷーん（wipe-mosaic）
+# モザイぷーん
 
 <img src="assets/icon/AppIcon.png" width="128" alt="モザイぷーんのアイコン">
 
