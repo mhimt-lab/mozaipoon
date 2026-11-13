@@ -126,6 +126,8 @@ public struct TextMask: Sendable {
     public let wordHits: Set<Int>
     /// Entries with something hidden.
     public let hidden: Set<Int>
+    /// For each word (as typed), the number of lines it was found in (see `wordLineCounts`).
+    public let wordLines: [String: Int]
     public var isEmpty: Bool { hidden.isEmpty }
 }
 
@@ -261,7 +263,8 @@ public struct ScreenText: Sendable {
                 wordHits.insert(owner[t.id] ?? 0)
             }
         }
-        return TextMask(frames: frames, wordHits: wordHits, hidden: hidden)
+        if cancelled() { return nil }
+        return TextMask(frames: frames, wordHits: wordHits, hidden: hidden, wordLines: wordLineCounts(o.words))
     }
 
     /// For each word, the number of lines (entries) where it was found in any reading, so the

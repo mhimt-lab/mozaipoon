@@ -128,6 +128,11 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
         var j = end
         var spaced = false
         while j < chars.count, chars[j].isWhitespace { j += 1; spaced = true }
+        /// The family name and given name ending at `e` are the whole line (a chat's contact
+        /// name 林健一, 森さくら): a one-letter family name is taken then too.
+        func wholeLine(_ e: Int) -> Bool {
+            !inWord && chars[..<i].allSatisfy(\.isWhitespace) && chars[e...].allSatisfy(\.isWhitespace)
+        }
         // Given name: up to 3 kanji; or kana before an honorific (山田さくらさん), at the end of
         // a spaced word (山田 さくら), before a particle (山田さくらが), or katakana (山田サクラ).
         var given = 0
@@ -151,8 +156,9 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
             }
             let stop = j + given
             if katakana {
-                // 山田サクラ(です・が), and katakana and kanji (山田ルミ子さん) with up to 2 kanji
-                if (2...3).contains(given) {
+                // 山田サクラ(です・が), and katakana and kanji (山田ルミ子さん, 山田アレクサ太郎)
+                // with up to 2 kanji
+                if given >= 2 {
                     var k = 0
                     while stop + k < chars.count, k < 2, isKanji(chars[stop + k]), !honorific(at: stop + k, polite: false) { k += 1 }
                     given += k
@@ -171,7 +177,7 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
             }
             // A one-letter family name without a space (森の中): only before an honorific
             // (森さくらさん).
-            if given < 2 || m.short && !spaced && !honorific(at: j + given, polite: false) { given = 0 }
+            if given < 2 || m.short && !spaced && !honorific(at: j + given, polite: false) && !wholeLine(j + given) { given = 0 }
         }
         var upper: Int?
         // An honorific starting a longer given name is the name: 君子 (山田 君子), さんご
@@ -184,8 +190,8 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
             upper = end  // 田中さん, 佐藤です
         } else if given > 0, let g = (1...given).reversed().first(where: { honorific(at: j + $0, polite: false) }) {
             upper = j + g  // 高橋健太郎様, 担当田中太郎さん
-        } else if given > 0, spaced || !m.short {
-            upper = j + given  // 山田 花子, 鈴木次郎も, 担当山田太郎, 山田太郎部(長)
+        } else if given > 0, spaced || !m.short || given >= 2 && wholeLine(j + given) {
+            upper = j + given  // 山田 花子, 鈴木次郎も, 担当山田太郎, 山田太郎部(長), 林健一 (the line)
         } else if !inWord, String(chars[i..<end]) == trimmed {
             upper = end  // the line is just the name
         }
@@ -222,6 +228,8 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
         guard let h = looseHonorifics.first(where: { String(chars[k...]).hasPrefix($0) }) else { continue }
         if h == "様", k > 0, notBeforeSama.contains(chars[k - 1]) || chars[k - 1] == "多" && k > 1 && "種物".contains(chars[k - 2]) { continue }
         if h == "氏", k + 1 < chars.count, notAfterShi.contains(chars[k + 1]) { continue }
+        // A katakana honorific starting a longer katakana word (公式チャンネル, 英語コーチング).
+        if let last = h.last, isKatakana(last), k + h.count < chars.count, isKatakana(chars[k + h.count]) { continue }
         let end = skipSpace(k)
         var p = end
         var kana = p
@@ -232,7 +240,9 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
             // ゆう子, まな美, さくら子, ルミ子: kana and one or two kanji.
             var q = t
             while q > 0, isKana(chars[q - 1]) { q -= 1 }
-            if kanaName(q, t), kanjiRun(skipSpace(q), 6) <= skipSpace(q) - 2 { p = skipSpace(q) }
+            // The family name before it: 2 kanji or more, or a listed one-letter one (関ゆう子部長).
+            let fq = skipSpace(q), fs = kanjiRun(fq, 6)
+            if kanaName(q, t), fq - fs >= 2 || fq - fs == 1 && shortFamilyNames.contains(String(chars[fs])) { p = fq }
         }
         var start = kanjiRun(p, 6)
         // 犬飼 太郎さん, 犬飼 蓮さん: the family name before a space.
@@ -240,8 +250,8 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
         let family = before < start ? kanjiRun(before, 4) : before
         if p - start >= 1, before - family >= (p - start >= 2 ? 1 : 2) {
             start = family
-        } else if p - start < 2 {
-            continue
+        } else if p - start < 2, !(p - start == 1 && shortFamilyNames.contains(String(chars[start]))) {
+            continue  // one kanji: only a listed one-letter family name (森部長, 原監督)
         }
         let r = idx[start]..<idx[end]
         if let o = out.firstIndex(where: { $0.overlaps(r) }) {
@@ -253,19 +263,26 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
     return out.sorted { $0.lowerBound < $1.lowerBound }
 }
 
-/// Every listed family name followed by every honorific, then nothing, a particle or a kanji
-/// word (森先生, 森様専用): the family name is always hidden. Found by review: one branch
-/// change left 森先生 visible.
+/// Every listed family name followed by every honorific and title, then nothing, a particle or
+/// a kanji word (森先生, 森様専用, 森部長): the family name is always hidden; and with a given name
+/// (花子, さくら, サクラ, ゆう子, ルミ子) before the common ones, the whole name is. Found by review:
+/// one branch change left 森先生 visible, and one-letter family names before titles (森部長).
 func selfCheckNames() -> [String] {
     var failures: [String] = []
+    func covers(_ s: String, _ n: Int) -> Bool {
+        let f = s.startIndex..<s.index(s.startIndex, offsetBy: n)
+        return nameRanges(in: s).contains { $0.lowerBound <= f.lowerBound && $0.upperBound >= f.upperBound }
+    }
+    let titles = Array(Set(honorifics).union(looseHonorifics)).sorted()
     for family in familyNames.union(shortFamilyNames).sorted() {
-        for h in ["さん", "さま", "様", "くん", "君", "ちゃん", "氏", "先生", "殿"] {
-            for after in ["", "が", "専用", "、", " です"] {
-                let s = family + h + after
-                let f = s.startIndex..<s.index(s.startIndex, offsetBy: family.count)
-                if !nameRanges(in: s).contains(where: { $0.lowerBound <= f.lowerBound && $0.upperBound >= f.upperBound }) {
-                    failures.append("name invariant: \(s) leaves \(family)")
-                }
+        for h in titles {
+            for after in ["", "が", "専用", "、", " です"] where !covers(family + h + after, family.count) {
+                failures.append("name invariant: \(family + h + after) leaves \(family)")
+            }
+        }
+        for given in ["花子", "さくら", "サクラ", "ゆう子", "ルミ子"] {
+            for h in ["さん", "様", "先生", "部長", "ママ"] where !covers(family + given + h, family.count + given.count) {
+                failures.append("name invariant: \(family + given + h) leaves part of \(family + given)")
             }
         }
     }

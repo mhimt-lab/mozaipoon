@@ -146,7 +146,8 @@ struct TextInspectorView: View {
     // MARK: Words
 
     private func wordsSection(_ text: ScreenText) -> some View {
-        let hits = text.wordLineCounts(model.textWords)
+        // Counted where the mosaic is made (in the background); nothing while it is remade.
+        let others = model.videos.filter { $0.id != video.id && $0.textMask != nil }
         return Section {
             Text("名前やアカウント名など。画面のどこに出ても、その言葉の部分を隠します。名字を入れると、続く名前も隠します。")
                 .font(.callout)
@@ -157,7 +158,10 @@ struct TextInspectorView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     WordField(model: model, word: w, commit: { new, _ in model.replaceTextWord(w, with: new) },
                               delete: { model.removeTextWord(w) })
-                    WordHits(count: hits[w] ?? 0)
+                    if let n = video.textMask?.wordLines[w] {
+                        WordHits(count: n, elsewhere: others.compactMap { $0.textMask?.wordLines[w] }.reduce(0, +),
+                                 othersRead: !others.isEmpty)
+                    }
                 }
                 .listRowSeparator(.hidden)
             }
@@ -198,8 +202,10 @@ struct TextInspectorView: View {
         let isMain: (TextEntry) -> Bool = {
             $0.frameCount >= minFrames || !$0.kinds.isEmpty || hidden.contains($0.id) || video.textLines.contains($0.id)
         }
-        let isHidden: (TextEntry) -> Bool = { video.textAll || video.textLines.contains($0.id) || hidden.contains($0.id) }
-        let shown: (TextEntry) -> Bool = { !model.textUnhiddenOnly || !isHidden($0) }
+        // Lines not hidden as a whole: also the partly hidden ones, whose rest may be a name the
+        // rules missed (090-0000-1111 犬飼 hides only the number).
+        let isWhole: (TextEntry) -> Bool = { video.textAll || video.textLines.contains($0.id) }
+        let shown: (TextEntry) -> Bool = { !model.textUnhiddenOnly || !isWhole($0) }
         let main = text.entries.filter { isMain($0) && shown($0) }
         let flashes = text.entries.filter { !isMain($0) && shown($0) }
         return Section {
@@ -217,10 +223,10 @@ struct TextInspectorView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .listRowSeparator(.hidden)
             if !text.entries.isEmpty {
-                Toggle("隠していない行だけを表示（\(text.entries.filter { !isHidden($0) }.count)行）", isOn: $model.textUnhiddenOnly)
+                Toggle("行全体は隠していない行だけを表示（\(text.entries.filter { !isWhole($0) }.count)行）", isOn: $model.textUnhiddenOnly)
                 .toggleStyle(.switch)
                 .controlSize(.small)
-                .help("隠していない行だけを並べて、隠し忘れがないか確かめられます")
+                .help("何も隠していない行と、一部だけ隠した行を並べます。一部だけの行は、残った文字に名前などがないか確かめてください")
                 .listRowSeparator(.hidden)
             }
             if text.entries.isEmpty {
@@ -228,7 +234,7 @@ struct TextInspectorView: View {
                     .foregroundStyle(.secondary)
                     .listRowSeparator(.hidden)
             } else if main.isEmpty, flashes.isEmpty {
-                Text("隠していない行はありません。")
+                Text("行全体を隠していない行はありません。")
                     .foregroundStyle(.secondary)
                     .listRowSeparator(.hidden)
             }
@@ -369,19 +375,22 @@ private struct TextLineRow: View {
     }
 }
 
-/// How many lines of this video a word was found in; none is a warning (a misreading, or 高
-/// typed for 髙), since the user would otherwise believe the word is hidden.
+/// How many lines of this video a word was found in. Found in no video is a warning (a
+/// misreading, or 高 typed for 髙), since the user would otherwise believe the word is hidden;
+/// found only in other videos is not (words are shared by every video).
 private struct WordHits: View {
     let count: Int
+    let elsewhere: Int
+    let othersRead: Bool
     var body: some View {
-        if count > 0 {
-            Text("この動画で\(count)行")
+        if count > 0 || elsewhere > 0 {
+            Text(count > 0 ? "この動画で\(count)行" : "この動画にはありません（ほかの動画で\(elsewhere)行）")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .padding(.leading, 4)
         } else {
             Label {
-                Text("この動画では見つかりませんでした。字の違い（高／髙など）や読み違いがないか、下の一覧で確かめてください。")
+                Text("\(othersRead ? "どの動画でも" : "この動画では")見つかりませんでした。字の違い（高／髙など）や読み違いがないか、下の一覧で確かめてください。")
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)

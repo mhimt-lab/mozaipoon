@@ -99,6 +99,7 @@ final class AppModel {
     var currentID: UUID? {
         didSet {
             guard oldValue != currentID else { return }
+            textUnhiddenOnly = false  // a filter left on would make the next video's list look short
             followPurpose()
             showCurrent(previous: oldValue)
         }
@@ -606,6 +607,7 @@ final class AppModel {
         // Nothing is searched before the user chose what to hide in the video.
         guard v.isReady, v.purpose != nil, v.textScanning == nil, v.textState != .waiting else { return }
         if v.purpose == .faces { v.purpose = .both }  // text asked for later
+        if v.text != nil { undoManager?.removeAllActions() }  // line numbers change; old checks no longer apply
         v.text = nil
         v.textMask = nil
         v.textOptions = nil

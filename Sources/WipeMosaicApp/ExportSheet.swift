@@ -16,6 +16,16 @@ struct ExportSheet: View {
                 .padding([.horizontal, .top], 24)
                 .padding(.bottom, 12)
 
+            // Before the list, where it is read before pressing the button.
+            VStack(alignment: .leading, spacing: 6) {
+                sheetWarning("自動で見つからなかった顔や文字は隠れません。公開する前に、書き出した動画を最後まで確かめてください。")
+                if !missingWords.isEmpty {
+                    sheetWarning("隠す言葉\(missingWords.map { "「\($0)」" }.joined())は、どの動画でも見つかっていません。字の違い（高／髙など）や読み違いがないか確かめてください。")
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
+
             if candidates.count > 1 {
                 Toggle(sources: choiceBindings, isOn: \.self) {
                     Text("すべて（\(chosen.count)／\(candidates.filter(\.canExport).count)本）")
@@ -109,14 +119,23 @@ struct ExportSheet: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Label {
-                Text("自動で見つからなかった顔や文字は隠れません。公開する前に、書き出した動画を最後まで確かめてください。")
-                    .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            }
-            .font(.callout)
         }
+    }
+
+    /// Words found in no video whose text was read (a misreading, or 高 typed for 髙).
+    private var missingWords: [String] {
+        let read = model.videos.compactMap(\.textMask)
+        guard !read.isEmpty else { return [] }
+        return model.textWords.filter { w in read.allSatisfy { ($0.wordLines[w] ?? 0) == 0 } }
+    }
+
+    private func sheetWarning(_ text: String) -> some View {
+        Label {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
+        .font(.callout)
     }
 }
 
@@ -162,9 +181,7 @@ private struct ExportRow: View {
                         warning("\(off.joined(separator: ""))は、自動で隠さない設定です")
                     }
                     if video.canExport, let note = notSearched {
-                        Text(note)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                        warning(note)
                     }
                     if video.canExport, !video.uncheckedHints.isEmpty {
                         HStack(spacing: 8) {
@@ -198,12 +215,13 @@ private struct ExportRow: View {
         .font(.callout)
     }
 
-    /// The kind of search not asked for when the video was added (not a warning: the user
-    /// chose it, but a video may show both faces and a screen).
+    /// The kind of search not asked for when the video was added: a warning, since the user
+    /// may have chosen it by mistake (Return repeats the last choice) and a video may show both
+    /// faces and a screen.
     private var notSearched: String? {
         switch video.purpose {
-        case .faces? where video.textState == nil: "画面の文字は読み取っていません"
-        case .text? where video.state == .idle: "人の顔は探していません"
+        case .faces? where video.textState == nil: "画面の文字は読み取っていません（電話番号や名前などの文字は隠れません）"
+        case .text? where video.state == .idle: "人の顔は探していません（顔が映っていても隠れません）"
         default: nil
         }
     }

@@ -77,7 +77,7 @@ private struct AppCommands: Commands {
                 .keyboardShortcut("3")
                 .disabled(model.current?.summary == nil)
             Divider()
-            Button(model.showFaceBoxes ? "顔の枠を隠す" : "顔の枠を表示") { model.showFaceBoxes.toggle() }
+            Button(model.showFaceBoxes ? "枠を隠す" : "枠を表示") { model.showFaceBoxes.toggle() }
                 .keyboardShortcut("b")
             Divider()
         }

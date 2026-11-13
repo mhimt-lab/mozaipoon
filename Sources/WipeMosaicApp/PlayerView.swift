@@ -133,11 +133,11 @@ struct ViewerView: View {
     @ViewBuilder
     private var boxToggle: some View {
         if video.analysis != nil || video.textMask != nil, model.viewMode != .result {
-            let what = video.analysis != nil ? "顔の枠" : "隠す範囲の枠"
+            // One switch for the face boxes and the text outlines (both when both are found).
             Button {
                 model.showFaceBoxes.toggle()
             } label: {
-                Label(model.showFaceBoxes ? "\(what)を隠す" : "\(what)を表示",
+                Label(model.showFaceBoxes ? "枠を隠す" : "枠を表示",
                       systemImage: model.showFaceBoxes ? "person.crop.square" : "person.crop.square.badge.xmark")
                     .font(.callout)
             }
