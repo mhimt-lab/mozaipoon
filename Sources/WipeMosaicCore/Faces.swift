@@ -138,15 +138,26 @@ public func autoBlock(_ size: CGSize) -> CGFloat {
     max(2, (max(size.width, size.height) / 60).rounded())
 }
 
-public func applyMosaic(_ img: CIImage, rects: [CGRect], block: CGFloat) -> CIImage {
-    guard !rects.isEmpty else { return img }
+/// The whole image in blocks of `block` px, each the average colour of the pixels under it.
+/// CIPixellate alone takes the colour at the block centre, so thin high-contrast strokes
+/// (text) that move by a pixel flip whole blocks between black and white: heavy flicker when
+/// the screen scrolls or the camera moves, and over many frames the samples would show the
+/// actual pixels at many positions. Averaging first keeps each block steady.
+public func pixellated(_ img: CIImage, block: CGFloat) -> CIImage {
     let ext = img.extent
-    let pix = img.clampedToExtent()
+    return img.clampedToExtent()
+        .applyingFilter("CIBoxBlur", parameters: [kCIInputRadiusKey: max(1, block / 2)])
         .applyingFilter(
             "CIPixellate",
             parameters: [kCIInputScaleKey: block, kCIInputCenterKey: CIVector(x: ext.minX, y: ext.minY)]
         )
         .cropped(to: ext)
+}
+
+public func applyMosaic(_ img: CIImage, rects: [CGRect], block: CGFloat) -> CIImage {
+    guard !rects.isEmpty else { return img }
+    let ext = img.extent
+    let pix = pixellated(img, block: block)
     var out = img
     for r in rects {
         let c = r.intersection(ext)

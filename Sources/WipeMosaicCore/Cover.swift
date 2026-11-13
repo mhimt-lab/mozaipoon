@@ -248,11 +248,7 @@ public func applyBlur(_ img: CIImage, rects: [CGRect], block: CGFloat) -> CIImag
     let ext = img.extent
     let boxes = rects.map { $0.intersection(ext) }.filter { !$0.isNull && !$0.isEmpty }
     guard !boxes.isEmpty else { return img }
-    let blurred = img.clampedToExtent()
-        .applyingFilter(
-            "CIPixellate",
-            parameters: [kCIInputScaleKey: block, kCIInputCenterKey: CIVector(x: ext.minX, y: ext.minY)]
-        )
+    let blurred = pixellated(img, block: block).clampedToExtent()
         .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: block])
         .cropped(to: ext)
     var hard = CIImage.empty()

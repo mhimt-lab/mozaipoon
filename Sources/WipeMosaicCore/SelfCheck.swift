@@ -213,8 +213,11 @@ func selfCheckCover() -> [String] {
         var px = [UInt8](repeating: 0, count: 4 * 4 * 4)
         CIContext().render(out, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: 198, y: 198, width: 4, height: 4),
                            format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
-        let reds = Set(stride(from: 0, to: px.count, by: 4).map { px[$0] })
-        expect(reds.count == 1, "the hole of a ring sticker is hidden under it: \(reds.count) values in 4×4 px")
+        // The 4×4 px straddle a block edge (x, y = 200), so allow the two neighbouring block
+        // averages to differ slightly; the bare face would alternate between 0 and 255.
+        let reds = stride(from: 0, to: px.count, by: 4).map { Int(px[$0]) }
+        let spread = (reds.max() ?? 0) - (reds.min() ?? 0)
+        expect(spread <= 16, "the hole of a ring sticker is hidden under it: values \(Set(reds).sorted()) in 4×4 px")
     } else { failures.append("ring sticker could not be made") }
     // Half-transparent: the face shows through even though every pixel is "there".
     let glass = image {
@@ -237,5 +240,23 @@ func selfCheckCover() -> [String] {
     }
     let clear = image { _ in }
     expect(clear.map { (try? Sticker(cgImage: $0)) == nil } == true, "fully transparent image is refused")
+
+    // Flicker: thin dark strokes (text) moving by one pixel at a time under the mosaic. Each
+    // block must keep about the same colour (its average); taking the block-centre colour
+    // flipped it between black and white as the screen scrolled.
+    var blockValues: [Int] = []
+    for shift in 0..<8 {
+        let w = 64, h = 32
+        var data = [UInt8](repeating: 255, count: w * h * 4)
+        for y in 0..<h { for x in 0..<w where (x + shift) % 8 < 2 { for c in 0..<3 { data[(y * w + x) * 4 + c] = 0 } } }
+        let img = CIImage(bitmapData: Data(data), bytesPerRow: w * 4, size: CGSize(width: w, height: h),
+                          format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        var px = [UInt8](repeating: 0, count: 4)
+        CIContext().render(pixellated(img, block: 32), toBitmap: &px, rowBytes: 4,
+                           bounds: CGRect(x: 5, y: 5, width: 1, height: 1), format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        blockValues.append(Int(px[0]))
+    }
+    let blockSpread = (blockValues.max() ?? 0) - (blockValues.min() ?? 0)
+    expect(blockSpread <= 40, "mosaic block stays steady while thin strokes move: values \(blockValues)")
     return failures
 }
