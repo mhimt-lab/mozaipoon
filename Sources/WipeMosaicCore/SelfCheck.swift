@@ -15,7 +15,11 @@ public func selfCheck() -> [String] {
         ("山田 さくら", ["山田 さくら"]), ("山田さくらさん", ["山田さくら"]), ("山田さくら", ["山田さくら"]),
         ("山田サクラ", ["山田サクラ"]), ("山田サクラです", ["山田サクラ"]), ("山田サクラが来た", ["山田サクラ"]),
         ("桑原さん", ["桑原"]), ("葛西様", ["葛西"]), ("髙橋", ["髙橋"]), ("濱田さん", ["濱田"]), ("森さん", ["森"]),
-        ("山田 は来た", []), ("森の中", []), ("東京都みほん区", []),
+        ("山田アレクサンダー", ["山田アレクサンダー"]), ("山田コーポレーション", ["山田コーポレーション"]),
+        ("長谷部さん", ["長谷部"]),
+        ("山田 は来た", []), ("山田 からきたよね", []), ("森の中", []), ("東京都みほん区", []),
+        // Known gaps (documented): kept so a change in them is noticed.
+        ("担当山田太郎", []), ("山田さくらが来た", []),
     ]
     for (s, want) in names {
         let got = nameRanges(in: s).map { String(s[$0]) }
@@ -39,6 +43,20 @@ public func selfCheck() -> [String] {
     expect(wordRanges(in: full, words: [normalizedForMatch("yamada_t")]).count == 1, "full-width word")
     expect(wordRanges(in: "鈴木 次郎です", words: ["鈴木"]).map { String("鈴木 次郎です"[$0]) } == ["鈴木 次郎"],
            "word with the given name after it")
+
+    // Wrapped email addresses and URLs: the end of the upper line and the start of the next.
+    let wraps: [(String, TextKind?)] = [
+        ("メールは hanako.yamada@", .email), ("hanako.yamada@exam", .email), ("hanako.yamada@example.", .email),
+        ("hanako.yamada@example.com", .email), ("資料は https://", .url), ("https://example.com/share/", .url),
+        ("よろしくお願いします", nil), ("9:41", nil),
+    ]
+    for (s, want) in wraps { expect(wrapKind(endOf: s) == want, "wrap \(s): \(String(describing: wrapKind(endOf: s)))") }
+    // A line from Vision is a bridged NSString (UTF-16 indices): the end must still be found.
+    let line = "連絡先 https://example.com/users/yamada-hana"
+    let bridged = NSString(characters: Array(line.utf16), length: line.utf16.count) as String
+    expect(wrapKind(endOf: bridged) == .url, "wrap: bridged Japanese line ending with a URL")
+    expect(leadingWord("ple.com です").map { String("ple.com です"[$0]) } == "ple.com", "leading word")
+    expect(trailingWord("メールは hanako.yam").map { String("メールは hanako.yam"[$0]) } == "hanako.yam", "trailing word")
 
     failures += selfCheckMask()
     return failures

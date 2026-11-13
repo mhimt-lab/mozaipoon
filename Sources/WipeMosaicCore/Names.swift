@@ -3,8 +3,11 @@ import Foundation
 // Japanese person names in a line of on-screen text. macOS has no name recognition for
 // Japanese (NLTagger's nameType is not available for it), so common family names are looked
 // up and accepted only where a name is likely: followed by an honorific, a given name, or
-// alone on the line (a chat's contact name). Names with rare family names and nicknames are
-// not found; the user adds those as words.
+// alone on the line (a chat's contact name). Names with rare family names and nicknames, a
+// hiragana given name followed by more text without a space (山田さくらが来た, which cannot be
+// told from particles) and names right after other kanji without an honorific (担当山田太郎)
+// are not found; the user adds those as words. A katakana word after a family name is taken
+// as the given name, so a company name (山田コーポレーション) is hidden too.
 
 /// Common Japanese family names (two or more characters).
 private let familyNames: Set<String> = [
@@ -100,10 +103,13 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
         if given == 0, spaced || !m.short, j < chars.count, isHiragana(chars[j]) || isKatakana(chars[j]) {
             // One script: katakana (サクラ) stops at the hiragana after it (サクラです).
             let kana: (Character) -> Bool = isKatakana(chars[j]) ? isKatakana : isHiragana
-            while j + given < chars.count, given < 5, kana(chars[j + given]), !honorific(at: j + given, polite: false) {
+            // A katakana name is taken whole (山田アレクサンダー), not cut where the rest shows.
+            let limit = isKatakana(chars[j]) ? 10 : 5
+            while j + given < chars.count, given < limit, kana(chars[j + given]), !honorific(at: j + given, polite: false) {
                 given += 1
             }
             let stop = j + given
+            if stop < chars.count, kana(chars[stop]), !honorific(at: stop, polite: false) { given = 0 }  // longer: not a name
             let ok: Bool
             if honorific(at: stop, polite: false) {
                 ok = true  // 山田さくらさん

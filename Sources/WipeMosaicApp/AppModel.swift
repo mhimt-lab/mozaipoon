@@ -201,7 +201,7 @@ final class AppModel {
     var isExporting: Bool { exportProgress != nil }
     /// Also with a word typed but not applied yet: the export applies it first.
     var canExport: Bool {
-        !isExporting && (!exportable.isEmpty || wordDrafts.contains { $0.key != $0.value } && videos.contains { $0.text != nil })
+        !isExporting && (!exportable.isEmpty || hasWordDraft && videos.contains { $0.text != nil })
     }
 
     // MARK: Export sheet (choose videos when more than one can be written)
@@ -684,8 +684,7 @@ final class AppModel {
         v.textMaskRequest += 1
         let request = v.textMaskRequest
         v.textMaskTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let mask = text.mask(o)
-            guard !Task.isCancelled else { return }  // partial
+            guard let mask = text.maskUnlessCancelled(o) else { return }
             await self?.setTextMask(id, request, mask, for: o)
         }
     }
@@ -753,13 +752,23 @@ final class AppModel {
 
     /// Apply words typed but not confirmed with Return (the export button does not take the
     /// focus from the field, so leaving it does not apply them).
-    func commitWordDrafts() {
+    /// Not confirmed by the user, so an emptied word is kept (only Return or ⊗ removes one):
+    /// a field being retyped must not stop hiding the word. Returns whether a word changed.
+    @discardableResult
+    func commitWordDrafts() -> Bool {
         let drafts = wordDrafts
         wordDrafts = [:]
-        for (old, new) in drafts where new != old {
+        let before = textWords
+        for (old, new) in drafts where !Self.isBlank(new) && new != old {
             if old.isEmpty { addTextWord(new) } else { replaceTextWord(old, with: new) }
         }
+        return textWords != before
     }
+
+    /// A draft that would change the words when applied.
+    var hasWordDraft: Bool { wordDrafts.contains { !Self.isBlank($0.value) && $0.value != $0.key } }
+
+    static func isBlank(_ s: String) -> Bool { s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     /// Change a word in place; emptied, it is removed, and a word already listed is not doubled.
     func replaceTextWord(_ old: String, with new: String) {
@@ -918,7 +927,9 @@ final class AppModel {
 
     /// Start writing the videos checked in the sheet.
     func confirmExport() {
-        commitWordDrafts()
+        // A word applied now remakes the text mosaic: stay in the sheet, whose rows show that
+        // and turn on again when it is done.
+        if commitWordDrafts() { return }
         let targets = videos.filter { exportChoice.contains($0.id) && $0.canExport }
         showingExportSheet = false
         guard !targets.isEmpty, !isExporting else { return }
@@ -984,6 +995,12 @@ final class AppModel {
             return
         }
         await ensureTextMask(v)
+        // The options may have changed while it waited (a word removed): nothing to hide any
+        // more is not written as a "mosaic" copy.
+        guard v.hasChoices else {
+            v.job = .failed("モザイクをかけるものがなくなりました")
+            return
+        }
         let frames = v.frames(hold: hold)
         let render = render(for: v)
         let selection = v.selected

@@ -114,18 +114,21 @@ struct TextInspectorView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .listRowSeparator(.hidden)
             ForEach(model.textWords, id: \.self) { w in
-                WordField(model: model, word: w, commit: { model.replaceTextWord(w, with: $0) }, delete: { model.removeTextWord(w) })
+                WordField(model: model, word: w, commit: { new, _ in model.replaceTextWord(w, with: new) },
+                          delete: { model.removeTextWord(w) })
                     .listRowSeparator(.hidden)
             }
             if model.addingTextWord || model.textWords.isEmpty {
                 // Return adds the word and leaves a new empty field, to type the next one.
                 WordField(model: model, word: "", focused: model.addingTextWord,
-                          canDelete: !model.textWords.isEmpty, commit: { w in
-                    if w.trimmingCharacters(in: .whitespaces).isEmpty {
+                          canDelete: !model.textWords.isEmpty, commit: { w, submitted in
+                    if AppModel.isBlank(w) {
                         model.addingTextWord = false
                     } else {
                         model.addTextWord(w)
-                        model.addingTextWord = true  // keep an empty field for the next word
+                        // After Return, keep an empty field for the next word (not when the
+                        // field was left: the focus belongs where the user clicked).
+                        model.addingTextWord = submitted
                     }
                 }, delete: { model.addingTextWord = false })
                 .listRowSeparator(.hidden)
@@ -312,7 +315,8 @@ private struct WordField: View {
     var focused = false
     /// The only (empty) field of an empty list cannot be closed.
     var canDelete = true
-    let commit: (String) -> Void
+    /// The text, and whether Return was pressed (not the field left).
+    let commit: (String, Bool) -> Void
     let delete: () -> Void
     @FocusState private var isFocused: Bool
 
@@ -347,7 +351,10 @@ private struct WordField: View {
     private func apply(submitted: Bool) {
         let text = model.wordDrafts.removeValue(forKey: word) ?? word
         guard text != word || word.isEmpty else { return }  // the new field left empty closes
-        commit(text)
+        // Emptying a word removes it only on Return; leaving the field keeps the word, so one
+        // being retyped is not dropped by scrolling or switching tabs.
+        if !submitted, !word.isEmpty, AppModel.isBlank(text) { return }
+        commit(text, submitted)
         // After Return, the new-word field stays, empty, for the next word. Not when the field
         // was left by clicking another one: that one keeps the focus.
         if submitted, word.isEmpty, !text.trimmingCharacters(in: .whitespaces).isEmpty { isFocused = true }

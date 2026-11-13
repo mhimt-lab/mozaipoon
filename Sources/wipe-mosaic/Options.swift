@@ -60,8 +60,8 @@ let usage = """
       wipe-mosaic people <input> --match <other video>   (distance from each person to the
                                                     people of another video)
       wipe-mosaic text <input> [--text-kinds ...] [--words ...] [--list]
-      wipe-mosaic selfcheck   (regression checks of the rules that find personal information)
                                                    (text found on screen; --list prints the text)
+      wipe-mosaic selfcheck   (regression checks of the rules that find personal information)
       wipe-mosaic run <input> <output> (--wipe ... | --people ... | --screen-text) [options]
       wipe-mosaic preview <input> --wipe ... --at <seconds> -o <png> [options]
       wipe-mosaic info <input>                          (JSON: width, height, duration, fps)
