@@ -174,7 +174,10 @@ private struct ExportRow: View {
                         warning(skipped)
                     }
                     if video.canExport, case let people = model.seeThroughStickers(video), !people.isEmpty {
-                        warning("\(people.map { "人物 \($0)" }.joined(separator: "、"))のスタンプは、顔の一部が透けて見えます")
+                        let names = people.map { "人物 \($0.person)" }.joined(separator: "、")
+                        warning(people.allSatisfy(\.fixedByLarger)
+                            ? "\(names)のスタンプでは、顔の一部が見えます。「隠し方の調整」の「スタンプの大きさ」を上げてください"
+                            : "\(names)のスタンプは、顔に重なる所に透明や半透明の部分があり、顔が透けて見えます。別の画像にしてください")
                     }
                     if video.canExport, let a = video.analysis, !a.people.isEmpty, video.selected.isEmpty {
                         warning("顔が\(a.people.count)人見つかりましたが、誰も選んでいません（顔は隠れません）")
@@ -231,7 +234,7 @@ private struct ExportRow: View {
 
     private var detail: String {
         if let searching = video.searchingLabel { return searching + "…終わると書き出せます" }
-        if video.textMaskPending { return "文字のモザイクを作っています…" }
+        if video.textMaskPending { return "文字を隠す範囲を作っています…" }
         if !video.hasChoices {
             var why: [String] = []
             if let a = video.analysis { why.append(a.people.isEmpty ? "顔が見つかりませんでした" : "人を選んでいません") }

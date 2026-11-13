@@ -134,9 +134,12 @@ final class VideoItem: Identifiable {
     var hasChoices: Bool { (analysis != nil && !selected.isEmpty) || hiddenTextCount > 0 }
 
     func resultIsStale(_ params: MosaicParams) -> Bool {
-        summary.map {
-            $0.selection != selected || $0.params != params || $0.text != effectiveTextOptions
-                || $0.stickers != stickers.filter { selected.contains($0.key) }
+        summary.map { s in
+            let current = stickers.filter { selected.contains($0.key) }
+            // The sticker size only changes a video that has (or had) stickers.
+            var now = params, then = s.params
+            if current.isEmpty && s.stickers.isEmpty { now.stickerScale = 0; then.stickerScale = 0 }
+            return s.selection != selected || then != now || s.text != effectiveTextOptions || s.stickers != current
         } ?? false
     }
     func hasUnexportedWork(_ params: MosaicParams) -> Bool {
@@ -172,7 +175,7 @@ final class VideoItem: Identifiable {
             default: break
             }
         }
-        return out.isEmpty ? nil : "\(out.joined(separator: "と"))は探していないので、モザイクがかかりません"
+        return out.isEmpty ? nil : "\(out.joined(separator: "と"))は探していないので、隠れません"
     }
 
     /// "3人中 1人・文字 12行を隠す" for the sidebar and the export sheet (mosaic, blur or sticker).

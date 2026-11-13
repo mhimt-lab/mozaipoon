@@ -32,7 +32,7 @@ public final class LiveMosaic: @unchecked Sendable {
                 ? index.allRects(at: t, hold: render.hold, pad: render.pad).map { $0.offsetBy(dx: origin.x, dy: origin.y) }
                 : []
             let stickers = enabled
-                ? index.stickerBoxes(at: t).map { StickerBox(rect: $0.rect.offsetBy(dx: origin.x, dy: origin.y), person: $0.person) }
+                ? index.stickerBoxes(at: t).map { $0.offsetBy(dx: origin.x, dy: origin.y) }
                 : []
             guard !rects.isEmpty || !stickers.isEmpty else {
                 request.finish(with: source, context: nil)

@@ -80,7 +80,7 @@ private struct RegisteredSettings: View {
                     Label(m, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
                 }
             } header: {
-                Text("どの動画でもモザイクをかける人の顔写真")
+                Text("どの動画でも隠す人の顔写真")
             } footer: {
                 Text("動画を追加すると、ここの写真に似ている人に最初からチェックが入ります。判定は確実ではないので、一覧で必ず確かめてください。写真はドロップしても追加できます。写真はこのMacの中だけに保存され、どこにも送信されません。")
                     .font(.callout)
@@ -156,16 +156,16 @@ private struct StickerSettings: View {
                                     .aspectRatio(contentMode: .fit)
                                     .frame(width: 64, height: 64)
                                 Text("スタンプ \(i + 1)").font(.callout)
-                                Button("削除", role: .destructive) { model.removeSticker(item) }
+                                Button("削除", role: .destructive) { model.stickerToRemove = item }
                                     .buttonStyle(.link)
                                     .font(.callout)
                             }
                             .contextMenu {
-                                Button("削除", systemImage: "trash", role: .destructive) { model.removeSticker(item) }
+                                Button("削除", systemImage: "trash", role: .destructive) { model.stickerToRemove = item }
                             }
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel("スタンプ \(i + 1)")
-                            .accessibilityAction(named: "削除") { model.removeSticker(item) }
+                            .accessibilityAction(named: "削除") { model.stickerToRemove = item }
                         }
                     }
                     .padding(.vertical, 6)
@@ -180,5 +180,18 @@ private struct StickerSettings: View {
         }
         .formStyle(.grouped)
         .frame(height: 300)
+        .confirmationDialog(
+            "このスタンプを削除しますか？",
+            isPresented: Binding(get: { model.stickerToRemove != nil }, set: { if !$0 { model.stickerToRemove = nil } }),
+            presenting: model.stickerToRemove
+        ) { item in
+            Button("削除", role: .destructive) { model.removeSticker(item) }
+            Button("キャンセル", role: .cancel) {}
+        } message: { item in
+            let users = model.videos.filter { $0.stickers.values.contains(item.id) }.count
+            Text(users > 0
+                 ? "\(users)本の動画で使っています。使っていた人は、基本の隠し方（モザイクかぼかし）に戻ります。削除は取り消せません。"
+                 : "削除は取り消せません。")
+        }
     }
 }

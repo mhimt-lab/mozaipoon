@@ -206,10 +206,10 @@ private struct FaceBox: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)  // the box itself carries the label
         }
-        .help(mosaic ? "押すとモザイクを外します" : "押すとモザイクをかけます")
+        .help(mosaic ? "押すと、この人の顔を隠すのをやめます" : "押すと、この人の顔を隠します")
         .accessibilityLabel("人物 \(person)")
-        .accessibilityValue(mosaic ? "モザイクあり" : "モザイクなし")
-        .accessibilityHint("モザイクを切り替えます")
+        .accessibilityValue(mosaic ? "隠す" : "隠さない")
+        .accessibilityHint("この人の顔を隠すかを切り替えます")
     }
 }
 

@@ -27,7 +27,7 @@ public struct FaceTrack: Sendable {
     /// from interpolating over a gap longer than `maxGap` frames. Short gaps (frames between
     /// tile passes for small faces, a single missed detection) count as seen.
     func isEstimated(atFrame f: Int, maxGap: Int) -> Bool {
-        guard let i = detections.firstIndex(where: { $0.frame >= f }) else { return true }
+        guard let i = firstDetection(atOrAfter: f) else { return true }
         let b = detections[i]
         if b.frame == f { return b.tracked }
         guard i > 0 else { return true }
@@ -36,19 +36,26 @@ public struct FaceTrack: Sendable {
     }
 
     func isTracked(atFrame f: Int) -> Bool {
-        detections.first(where: { $0.frame >= f }).map { $0.frame == f ? $0.tracked : true } ?? true
+        firstDetection(atOrAfter: f).map { detections[$0].frame == f ? detections[$0].tracked : true } ?? true
+    }
+
+    /// Index of the first detection at or after frame `f` (binary search: called for every
+    /// frame of the track).
+    private func firstDetection(atOrAfter f: Int) -> Int? {
+        guard let last = detections.last, last.frame >= f else { return nil }
+        var lo = 0, hi = detections.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if detections[mid].frame < f { lo = mid + 1 } else { hi = mid }
+        }
+        return lo
     }
 
     /// Box at frame `f`, linearly interpolated between detections; nil outside the track.
     /// Small faces are only searched on some frames (tile passes), and a detection can be
     /// missed, so the face is assumed to stay on screen between two detections of a track.
     func rect(atFrame f: Int) -> CGRect? {
-        guard span.contains(f) else { return nil }
-        var lo = 0, hi = detections.count - 1
-        while lo < hi {  // first detection with frame >= f
-            let mid = (lo + hi) / 2
-            if detections[mid].frame < f { lo = mid + 1 } else { hi = mid }
-        }
+        guard span.contains(f), let lo = firstDetection(atOrAfter: f) else { return nil }
         let b = detections[lo]
         guard b.frame != f, lo > 0 else { return b.rect }
         let a = detections[lo - 1]

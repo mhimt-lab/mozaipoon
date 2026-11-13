@@ -150,7 +150,7 @@ struct ContentView: View {
             if let v = model.current, v.stillSearching || v.textMaskPending { return "探し終わると書き出せます" }
             return "隠すもの（人や文字）を選ぶと書き出せます"
         }
-        if n == 1 { return "モザイクをかけた動画を書き出します（⌘E）" }
+        if n == 1 { return "選んだ顔や文字を隠した動画を書き出します（⌘E）" }
         return "書き出せる\(n)本の動画から、書き出すものを選びます（⌘E）"
     }
 
@@ -205,7 +205,7 @@ private struct EmptyStateView: View {
             VStack(alignment: .leading, spacing: 16) {
                 Step(number: 1, title: "動画を追加", detail: "何本でもまとめて追加できます。")
                 Step(number: 2, title: "何を隠すか選ぶ", detail: "人の顔、または画面に映る電話番号・名前などの文字。顔は人ごとに並べて、隠す人を選べます。")
-                Step(number: 3, title: "確かめて書き出す", detail: "選んだものだけにモザイクをかけます。画質は元の動画のままです。")
+                Step(number: 3, title: "確かめて書き出す", detail: "選んだものだけをモザイクやぼかしで隠します。画質は元の動画のままです。")
             }
             .frame(maxWidth: 420, alignment: .leading)
             Button("動画を追加…", systemImage: "plus") { model.importingVideo = true }

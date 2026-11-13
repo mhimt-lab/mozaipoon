@@ -89,6 +89,11 @@ final class AppModel {
     // MARK: Stickers (images put over a person's face)
     /// Loaded in the background at launch (each image is decoded and searched for a face).
     var stickerLibrary: [StickerItem] = []
+    /// The image waiting for the delete confirmation in Settings (in the model: @State
+    /// needs the SwiftUI macro plugin, see WipeMosaicApp).
+    var stickerToRemove: StickerItem?
+    /// Deleted while the library was still loading: the load read them before.
+    private var removedStickers: Set<UUID> = []
     /// The person waiting for an image from the file dialog.
     var stickerTarget: Int?
     var importingSticker = false
@@ -194,8 +199,11 @@ final class AppModel {
             let items = StickerStore.loadAll()
             await MainActor.run {
                 guard let model else { return }
-                // Images added while loading stay, after the saved ones.
-                model.stickerLibrary = items + model.stickerLibrary.filter { s in !items.contains { $0.id == s.id } }
+                // Images added while loading stay, after the saved ones; images deleted
+                // while loading stay deleted.
+                let saved = items.filter { !model.removedStickers.contains($0.id) }
+                model.stickerLibrary = saved + model.stickerLibrary.filter { s in !saved.contains { $0.id == s.id } }
+                model.removedStickers = []
                 model.refreshLive()
             }
         }
@@ -240,11 +248,13 @@ final class AppModel {
 
     func sticker(_ id: UUID?) -> StickerItem? { id.flatMap { id in stickerLibrary.first { $0.id == id } } }
 
-    /// Chosen people whose sticker lets part of the face show at the current size.
-    func seeThroughStickers(_ v: VideoItem) -> [Int] {
-        activeStickers(v).compactMap { person, id in
-            sticker(id).map { $0.sticker.showsFace(scale: stickerScale) } == true ? person : nil
-        }.sorted()
+    /// Chosen people whose sticker lets part of the face show at the current size, and
+    /// whether a larger size (up to the slider's 200%) would cover it.
+    func seeThroughStickers(_ v: VideoItem) -> [(person: Int, fixedByLarger: Bool)] {
+        activeStickers(v).compactMap { person, id -> (person: Int, fixedByLarger: Bool)? in
+            guard let s = sticker(id)?.sticker, s.showsFace(scale: stickerScale) else { return nil }
+            return (person, !s.showsFace(scale: 2.0))
+        }.sorted { $0.person < $1.person }
     }
 
     var mosaicParams: MosaicParams {
@@ -399,6 +409,7 @@ final class AppModel {
         do {
             try StickerStore.delete(item.id)
             stickerLibrary.removeAll { $0.id == item.id }
+            removedStickers.insert(item.id)
             for v in videos where v.stickers.values.contains(item.id) {
                 v.stickers = v.stickers.filter { $0.value != item.id }
                 if v.id == currentID { refreshLive() }
@@ -427,7 +438,7 @@ final class AppModel {
             let names = photos.prefix(3).map { "「\($0.lastPathComponent)」" }.joined(separator: "、")
             alert = AppAlert(
                 title: "写真は動画として追加できません",
-                message: "\(names)\(photos.count > 3 ? "など\(photos.count)枚" : "")は写真です。モザイクをかける人の顔写真として使うときは、「設定」（⌘,）の顔写真の欄に追加してください。")
+                message: "\(names)\(photos.count > 3 ? "など\(photos.count)枚" : "")は写真です。どの動画でも隠す人の顔写真として使うときは、「設定」（⌘,）の顔写真の欄に追加してください。")
         }
         for url in urls where url.isFileURL && !Self.isPhoto(url) {
             if let existing = videos.first(where: { $0.url.standardizedFileURL == url.standardizedFileURL }) {
@@ -672,7 +683,7 @@ final class AppModel {
         guard let v = current else { return }
         var s = v.selected
         if on { s.formUnion(v.withSimilar([person])) } else { s.remove(person) }
-        apply(s, to: v, action: on ? "モザイクをかける" : "モザイクを外す")
+        apply(s, to: v, action: on ? "顔を隠す" : "顔を隠すのをやめる")
     }
 
     func selectAll() {
@@ -870,7 +881,7 @@ final class AppModel {
         guard let v = current else { return }
         var s = v.textLines
         if on { s.insert(entry) } else { s.remove(entry) }
-        applyTextLines(s, to: v, action: on ? "行にモザイクをかける" : "行のモザイクを外す")
+        applyTextLines(s, to: v, action: on ? "行全体を隠す" : "行全体を隠すのをやめる")
     }
 
     private func applyTextLines(_ lines: Set<Int>, to v: VideoItem, action: String) {
@@ -1153,9 +1164,9 @@ final class AppModel {
         // The options may have changed while it waited (a word removed): nothing to hide any
         // more is not written as a "mosaic" copy.
         guard v.hasChoices else {
-            v.job = .failed("モザイクをかけるものがなくなりました")
+            v.job = .failed("隠すものがなくなりました")
             if alertOnFailure {
-                alert = AppAlert(title: "書き出しませんでした", message: "待っている間に選択が変わり、「\(v.name)」にはモザイクをかけるものがなくなりました。")
+                alert = AppAlert(title: "書き出しませんでした", message: "待っている間に選択が変わり、「\(v.name)」には隠すものがなくなりました。")
             }
             return
         }

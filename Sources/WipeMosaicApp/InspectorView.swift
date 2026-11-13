@@ -55,9 +55,9 @@ struct InspectorView: View {
         .contextMenu(forSelectionType: Int.self) { ids in
             if let id = ids.first, let p = video.person(id) {
                 if video.selected.contains(id) {
-                    Button("モザイクを外す", systemImage: "eye") { model.setSelected(id, false) }
+                    Button("顔を隠すのをやめる", systemImage: "eye") { model.setSelected(id, false) }
                 } else {
-                    Button("モザイクをかける", systemImage: "eye.slash") { model.setSelected(id, true) }
+                    Button("顔を隠す", systemImage: "eye.slash") { model.setSelected(id, true) }
                 }
                 Divider()
                 Button("この人が最初に映る場面へ", systemImage: "backward.end") { model.jump(to: p) }
@@ -96,7 +96,7 @@ struct InspectorView: View {
                     Text("全員（\(video.selected.count)／\(analysis.people.count)人）")
                 }
                 .toggleStyle(.checkbox)
-                .help("全員にモザイクをかける／全員外す")
+                .help("全員の顔を隠す／全員外す")
                 .listRowSeparator(.hidden)
                 .selectionDisabled()
 
@@ -224,8 +224,8 @@ private struct PersonRow: View {
                 }
                 .toggleStyle(.checkbox)
                 .accessibilityLabel("人物 \(person.id)")
-                .accessibilityValue(on ? "モザイクあり" : "モザイクなし")
-                .help(on ? "押すとモザイクを外します" : "押すとモザイクをかけます")
+                .accessibilityValue(on ? "隠す" : "隠さない")
+                .help(on ? "押すと、この人の顔を隠すのをやめます" : "押すと、この人の顔を隠します")
 
                 // The rest of the row selects the person and shows them in the video.
                 VStack(alignment: .leading, spacing: 2) {
@@ -285,7 +285,7 @@ private struct PersonRow: View {
                     // when it shows through a hole or a half-transparent part.
                     Badge(
                         text: sticker.showsFace(scale: 2.0)
-                            ? "この画像は透明や半透明の部分から顔が透けて見えます。別の画像にしてください"
+                            ? "顔に重なる所に透明や半透明の部分があり、顔が透けて見えます。別の画像にしてください"
                             : "この大きさでは顔の一部が見えます。「隠し方の調整」の「スタンプの大きさ」を上げてください",
                         systemImage: "eye.trianglebadge.exclamationmark")
                 }
@@ -536,7 +536,7 @@ private struct MosaicSection: View {
                     SliderRow(title: "\(model.coverStyle == .blur ? "ぼかし" : "モザイク")の広さ", value: $model.pad, range: 0.2...1.0, step: 0.05,
                               low: "狭い", high: "広い", text: "\(Int((model.pad * 100).rounded()))%",
                               note: "広げると、髪や耳まで隠れます。")
-                    Text("変えると「モザイクあり」の表示にすぐ反映されます。すべての動画に共通です。")
+                    Text("変えると、表示「モザイクあり」の動画にすぐ反映されます。すべての動画に共通です。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -653,7 +653,7 @@ private struct CoverMenu: View {
         .menuStyle(.button)
         .controlSize(.small)
         .fixedSize()
-        .help("モザイクの代わりに、好きな画像（顔の写真など）をこの人の顔に重ねられます")
+        .help("基本の隠し方（モザイクかぼかし）の代わりに、好きな画像（顔の写真など）をこの人の顔に重ねられます")
     }
 
     /// A menu item image: AppKit menus draw an NSImage at its own size.

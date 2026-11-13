@@ -164,6 +164,20 @@ func selfCheckCover() -> [String] {
     func jitter(_ v: [CGFloat]) -> CGFloat { zip(v, v.dropFirst()).map { abs($0 - $1) }.reduce(0, +) }
     expect(jitter(smooth) < jitter(raw), "steadied sizes jitter less")
 
+    // A cut: the same person jumps far away (or much closer) from one frame to the next.
+    // The average must not straddle the jump, which would blow the box up to cover both.
+    for (name, jumped) in [("far", CGRect(x: 900, y: 500, width: 200, height: 200)),
+                           ("closer", CGRect(x: 160, y: 160, width: 400, height: 400))] {
+        let still = CGRect(x: 100, y: 100, width: 200, height: 200)
+        let cut: [CGRect?] = Array(repeating: still, count: 30) + Array(repeating: jumped, count: 30)
+        let st = steadyBoxes(cut, centreFrames: 6, sizeFrames: 12, marginFrames: 6)
+        for (i, (b, s)) in zip(cut, st).enumerated() {
+            guard let b, let s else { failures.append("cut \(name): box \(i) missing"); continue }
+            expect(s.contains(b), "cut \(name): box \(i) contains the face")
+            expect(s.width <= b.width * 1.5, "cut \(name): box \(i) is \(Int(s.width)) wide for a \(Int(b.width)) face")
+        }
+    }
+
     // Coverage: a solid disc covers the face; a ring (a hole in the middle) does not.
     func image(_ draw: (CGContext) -> Void) -> CGImage? {
         guard let c = CGContext(data: nil, width: 200, height: 200, bitsPerComponent: 8, bytesPerRow: 0,

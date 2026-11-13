@@ -103,14 +103,18 @@ func runMosaic(_ o: RunOptions) async throws {
 
     if let report = o.report {
         // mosaic_boxes: x:y:w:h in video pixels, top-left origin, before --pad.
-        // sticker_boxes: person:x:y:w:h, same coordinates (the face box the image covers).
+        // sticker_boxes: person:x:y:w:h:estimated, same coordinates (the face box the image covers).
         var csv = "time_sec,mosaic_faces,other_faces,mosaic_boxes,text_boxes,sticker_boxes\n"
         let h = info.size.height
         for f in frames {
             let boxes = f.mosaic.map { String(format: "%.0f:%.0f:%.0f:%.0f", $0.minX, h - $0.maxY, $0.width, $0.height) }
             csv += String(format: "%.3f,%d,%d,", f.time, f.mosaic.count, f.kept.count) + boxes.joined(separator: " ")
                 + ",\(f.exact.count),"
-                + f.stickers.map { String(format: "%d:%.0f:%.0f:%.0f:%.0f", $0.person, $0.rect.minX, h - $0.rect.maxY, $0.rect.width, $0.rect.height) }
+                + f.stickers.map {
+                    // Last field 1: face estimated in this frame, a mosaic is drawn under the sticker.
+                    String(format: "%d:%.0f:%.0f:%.0f:%.0f:%d", $0.person, $0.rect.minX, h - $0.rect.maxY, $0.rect.width,
+                           $0.rect.height, $0.estimated ? 1 : 0)
+                }
                 .joined(separator: " ") + "\n"
         }
         try csv.write(to: report, atomically: true, encoding: .utf8)

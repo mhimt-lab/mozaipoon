@@ -16,10 +16,16 @@ public struct StickerBox: Sendable {
     /// between two appearances or held at the last known position. The face may be beside
     /// the box, so the mosaic (or blur) is drawn under the sticker with the usual margin.
     public let estimated: Bool
-    public init(rect: CGRect, person: Int, estimated: Bool = false) {
+    // No default for `estimated`: a box rebuilt without it would lose the mosaic under it.
+    public init(rect: CGRect, person: Int, estimated: Bool) {
         self.rect = rect
         self.person = person
         self.estimated = estimated
+    }
+
+    /// The same box moved (e.g. into a source image whose extent does not start at 0).
+    public func offsetBy(dx: CGFloat, dy: CGFloat) -> StickerBox {
+        StickerBox(rect: rect.offsetBy(dx: dx, dy: dy), person: person, estimated: estimated)
     }
 }
 
@@ -248,7 +254,9 @@ public func applyBlur(_ img: CIImage, rects: [CGRect], block: CGFloat) -> CIImag
 }
 
 /// Steady boxes for a sticker: a detected face box jitters a little every frame, which a
-/// mosaic hides but a picture shows. Within each run of consecutive frames:
+/// mosaic hides but a picture shows. Within each run of consecutive frames (a run also
+/// ends at a jump — a cut to the same person elsewhere or much closer — so the average
+/// never straddles two places and blows the box up to cover both):
 /// 1. the centre is averaged over ±`centreFrames` and the size over ±`sizeFrames`
 ///    (centred, so steady motion is followed without lag);
 /// 2. the margin each frame needs so its box still contains the frame's own face box is
@@ -263,7 +271,7 @@ func steadyBoxes(_ boxes: [CGRect?], centreFrames: Int, sizeFrames: Int, marginF
     while i < boxes.count {
         guard boxes[i] != nil else { i += 1; continue }
         var j = i
-        while j + 1 < boxes.count, boxes[j + 1] != nil { j += 1 }
+        while j + 1 < boxes.count, let next = boxes[j + 1], !isJump(boxes[j]!, next) { j += 1 }
         let run = (i...j).map { boxes[$0]! }
         let n = run.count
         func window(_ k: Int, _ r: Int) -> ClosedRange<Int> { max(0, k - r)...min(n - 1, k + r) }
@@ -285,4 +293,12 @@ func steadyBoxes(_ boxes: [CGRect?], centreFrames: Int, sizeFrames: Int, marginF
         i = j + 1
     }
     return out
+}
+
+/// The face moved too far or changed size too much in one frame to be the same shot
+/// (the distance is the one used to link detections into tracks).
+private func isJump(_ a: CGRect, _ b: CGRect) -> Bool {
+    let size = max(a.width, a.height, b.width, b.height)
+    let ratio = max(a.width, b.width) / max(1, min(a.width, b.width))
+    return hypot(a.midX - b.midX, a.midY - b.midY) > 0.75 * size || ratio > 1.5
 }
