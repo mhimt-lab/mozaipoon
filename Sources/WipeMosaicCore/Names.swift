@@ -3,11 +3,12 @@ import Foundation
 // Japanese person names in a line of on-screen text. macOS has no name recognition for
 // Japanese (NLTagger's nameType is not available for it), so common family names are looked
 // up and accepted only where a name is likely: followed by an honorific, a given name, or
-// alone on the line (a chat's contact name). Names with rare family names and nicknames, a
-// hiragana given name followed by more text without a space (山田さくらが来た, which cannot be
-// told from particles) and names right after other kanji without an honorific (担当山田太郎)
-// are not found; the user adds those as words. A katakana word after a family name is taken
-// as the given name, so a company name (山田コーポレーション) is hidden too.
+// alone on the line (a chat's contact name). Family names not in the list are found only with
+// さん・くん・ちゃん after 2–4 kanji (犬飼さん); nicknames are not found, the user adds them as
+// words. Hiding too much is preferred to leaving a name: a katakana word after a family name
+// is taken as the given name (山田コーポレーション too), a name inside a longer kanji word is
+// taken with up to 2 kanji before it (担当山田太郎), and ordinary words with さん (患者さん) are
+// hidden too.
 
 /// Common Japanese family names (two or more characters).
 private let familyNames: Set<String> = [
@@ -48,6 +49,8 @@ private let shortFamilyNames: Set<String> = ["森", "原", "林", "東", "関", 
 
 private let honorifics = ["さん", "さま", "様", "くん", "君", "ちゃん", "氏", "先生", "殿", "です", "と申します"]
 private let politeEndings: Set<String> = ["です", "と申します"]
+/// Particles that end a hiragana given name written without a space (山田さくらが来た).
+private let particles: Set<Character> = ["が", "は", "を", "に", "へ", "と", "も", "の", "や", "で"]
 
 private func isKanji(_ c: Character) -> Bool {
     guard let u = c.unicodeScalars.first, c.unicodeScalars.count == 1 else { return false }
@@ -96,41 +99,42 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
         var j = end
         var spaced = false
         while j < chars.count, chars[j].isWhitespace { j += 1; spaced = true }
-        // Given name: up to 3 kanji; or 2–5 kana before an honorific (山田さくらさん), at the end
-        // of a spaced word (山田 さくら), or katakana (山田サクラ).
+        // Given name: up to 3 kanji; or kana before an honorific (山田さくらさん), at the end of
+        // a spaced word (山田 さくら), before a particle (山田さくらが), or katakana (山田サクラ).
         var given = 0
         while j + given < chars.count, given < 3, isKanji(chars[j + given]) { given += 1 }
         if given == 0, spaced || !m.short, j < chars.count, isHiragana(chars[j]) || isKatakana(chars[j]) {
-            // One script: katakana (サクラ) stops at the hiragana after it (サクラです).
-            let kana: (Character) -> Bool = isKatakana(chars[j]) ? isKatakana : isHiragana
-            // A katakana name is taken whole (山田アレクサンダー), not cut where the rest shows.
-            let limit = isKatakana(chars[j]) ? 10 : 5
-            while j + given < chars.count, given < limit, kana(chars[j + given]), !honorific(at: j + given, polite: false) {
+            // One script: katakana (サクラ) stops at the hiragana after it (サクラです). Taken
+            // whole however long (山田アレクサンダー・ジュニア), not cut where the rest shows.
+            let katakana = isKatakana(chars[j])
+            let kana: (Character) -> Bool = katakana ? { isKatakana($0) || $0 == "・" } : isHiragana
+            while j + given < chars.count, kana(chars[j + given]), !honorific(at: j + given, polite: spaced) {
                 given += 1
             }
             let stop = j + given
-            if stop < chars.count, kana(chars[stop]), !honorific(at: stop, polite: false) { given = 0 }  // longer: not a name
             let ok: Bool
-            if honorific(at: stop, polite: false) {
-                ok = true  // 山田さくらさん
+            if honorific(at: stop, polite: spaced) {
+                ok = true  // 山田さくらさん, 山田 さくらこです
             } else if stop == chars.count || chars[stop].isWhitespace {
                 // 山田 さくら, 山田サクラ, and a line that is just 山田さくら (a contact name)
-                ok = spaced || isKatakana(chars[j]) || String(chars[i..<stop]) == trimmed
+                ok = spaced || katakana || String(chars[i..<stop]) == trimmed
             } else {
-                ok = !spaced && isKatakana(chars[j]) && !isKanji(chars[stop])  // 山田サクラです
+                ok = !spaced && katakana && !isKanji(chars[stop])  // 山田サクラです
             }
-            if given < 2 || !ok { given = 0 }
+            if !ok, !katakana, let p = (2...min(4, max(2, given - 1))).first(where: { given > $0 && particles.contains(chars[j + $0]) }) {
+                given = p  // 山田さくらが来た: up to the particle
+            } else if given < 2 || !ok {
+                given = 0
+            }
         }
         var upper: Int?
         if honorific(at: j, polite: !inWord) {
             upper = end  // 田中さん, 佐藤です
         } else if given > 0, let g = (1...given).reversed().first(where: { honorific(at: j + $0, polite: false) }) {
             upper = j + g  // 高橋健太郎様, 担当田中太郎さん
-        } else if inWord {
-            upper = nil
         } else if given > 0, j + given == chars.count || !isKanji(chars[j + given]), spaced || !m.short {
-            upper = j + given  // 山田 花子, 鈴木次郎も
-        } else if String(chars[i..<end]) == trimmed {
+            upper = j + given  // 山田 花子, 鈴木次郎も, 担当山田太郎
+        } else if !inWord, String(chars[i..<end]) == trimmed {
             upper = end  // the line is just the name
         }
         if let u = upper {
@@ -144,5 +148,12 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
             i += 1
         }
     }
-    return out
+    // Family names not in the list: 2–4 kanji before さん・くん・ちゃん (犬飼さん). Not 様 or 氏,
+    // which follow ordinary words (仕様, 同様). One kanji is too often a word (皆さん, 奥さん).
+    for k in chars.indices where ["さん", "くん", "ちゃん"].contains(where: { String(chars[k...]).hasPrefix($0) }) {
+        var start = k
+        while start > 0, k - start < 4, isKanji(chars[start - 1]) { start -= 1 }
+        if k - start >= 2, !out.contains(where: { $0.overlaps(idx[start]..<idx[k]) }) { out.append(idx[start]..<idx[k]) }
+    }
+    return out.sorted { $0.lowerBound < $1.lowerBound }
 }

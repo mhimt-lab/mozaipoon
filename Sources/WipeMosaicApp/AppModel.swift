@@ -999,6 +999,9 @@ final class AppModel {
         // more is not written as a "mosaic" copy.
         guard v.hasChoices else {
             v.job = .failed("モザイクをかけるものがなくなりました")
+            if alertOnFailure {
+                alert = AppAlert(title: "書き出しませんでした", message: "待っている間に選択が変わり、「\(v.name)」にはモザイクをかけるものがなくなりました。")
+            }
             return
         }
         let frames = v.frames(hold: hold)

@@ -16,10 +16,13 @@ public func selfCheck() -> [String] {
         ("山田サクラ", ["山田サクラ"]), ("山田サクラです", ["山田サクラ"]), ("山田サクラが来た", ["山田サクラ"]),
         ("桑原さん", ["桑原"]), ("葛西様", ["葛西"]), ("髙橋", ["髙橋"]), ("濱田さん", ["濱田"]), ("森さん", ["森"]),
         ("山田アレクサンダー", ["山田アレクサンダー"]), ("山田コーポレーション", ["山田コーポレーション"]),
-        ("長谷部さん", ["長谷部"]),
-        ("山田 は来た", []), ("山田 からきたよね", []), ("森の中", []), ("東京都みほん区", []),
-        // Known gaps (documented): kept so a change in them is noticed.
-        ("担当山田太郎", []), ("山田さくらが来た", []),
+        ("山田プロジェクトマネージャー", ["山田プロジェクトマネージャー"]),
+        ("山田アレクサンダー・ジュニア", ["山田アレクサンダー・ジュニア"]),
+        ("長谷部さん", ["長谷部"]), ("担当山田太郎", ["担当山田太郎"]), ("山田さくらが来た", ["山田さくら"]),
+        ("山田 さくらこです", ["山田 さくらこ"]), ("山田 まさひろです", ["山田 まさひろ"]),
+        ("犬飼さん", ["犬飼"]), ("担当犬飼くん", ["担当犬飼"]),
+        ("山田 は来た", []), ("森の中", []), ("東京都みほん区", []), ("皆さん", []), ("たくさん", []),
+        ("仕様です", []),
     ]
     for (s, want) in names {
         let got = nameRanges(in: s).map { String(s[$0]) }
@@ -44,19 +47,31 @@ public func selfCheck() -> [String] {
     expect(wordRanges(in: "鈴木 次郎です", words: ["鈴木"]).map { String("鈴木 次郎です"[$0]) } == ["鈴木 次郎"],
            "word with the given name after it")
 
-    // Wrapped email addresses and URLs: the end of the upper line and the start of the next.
-    let wraps: [(String, TextKind?)] = [
-        ("メールは hanako.yamada@", .email), ("hanako.yamada@exam", .email), ("hanako.yamada@example.", .email),
-        ("hanako.yamada@example.com", .email), ("資料は https://", .url), ("https://example.com/share/", .url),
-        ("よろしくお願いします", nil), ("9:41", nil),
+    // Wrapped email addresses, URLs and numbers: the last word of a line and the first of
+    // the next, joined.
+    let wraps: [(String, String, TextKind?)] = [
+        ("メールは hanako.yamada@", "example.com です", .email), ("hanako.yamada@exam", "ple.com", .email),
+        ("hanako.yamada @", "example.com", .email), ("sato.ichi", "ro@example.jp です", .email),
+        ("sato.ichi", "ro＠example.jp", .email), ("sato.ichi", "ro @example.jp", .email),
+        ("資料は https://", "example.com/share", .url), ("共有先は example", ".com/private/yamada", .url),
+        ("example.c", "om/users/yamada-hana", .url), ("https://example.com/share/", "abc123", .url),
+        ("電話は 080-0000-", "2222 です", .number), ("090-12", "34-5678", .number),
+        ("カード 4111 1111 1111", "1111 で", .number),
+        ("よろしくお願いします", "はい", nil), ("9:41", "5G", nil), ("Wi-Fi", "OK", nil),
     ]
-    for (s, want) in wraps { expect(wrapKind(endOf: s) == want, "wrap \(s): \(String(describing: wrapKind(endOf: s)))") }
-    // A line from Vision is a bridged NSString (UTF-16 indices): the end must still be found.
+    for (u, l, want) in wraps {
+        let got: TextKind? = {
+            guard let ru = trailingWord(u), let rl = leadingWord(l) else { return nil }
+            return wrappedKind(String(u[ru]), String(l[rl]))
+        }()
+        expect(got == want, "wrap \(u) / \(l): \(String(describing: got))")
+    }
+    // A line from Vision is a bridged NSString (UTF-16 indices): the words must still be found.
     let line = "連絡先 https://example.com/users/yamada-hana"
     let bridged = NSString(characters: Array(line.utf16), length: line.utf16.count) as String
-    expect(wrapKind(endOf: bridged) == .url, "wrap: bridged Japanese line ending with a URL")
-    expect(leadingWord("ple.com です").map { String("ple.com です"[$0]) } == "ple.com", "leading word")
-    expect(trailingWord("メールは hanako.yam").map { String("メールは hanako.yam"[$0]) } == "hanako.yam", "trailing word")
+    expect(trailingWord(bridged).map { String(bridged[$0]) } == "https://example.com/users/yamada-hana",
+           "trailing word of a bridged Japanese line")
+    expect(leadingWord("  ple.com です").map { String("  ple.com です"[$0]) } == "ple.com", "leading word")
 
     failures += selfCheckMask()
     return failures

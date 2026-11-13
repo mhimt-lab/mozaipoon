@@ -472,37 +472,40 @@ private func kindParts(_ t: TextTrack, size: CGSize) -> [TextKind: [CGRect]] {
 }
 
 /// Information often continues on the next line: an address (building name, room number)
-/// that matches no pattern by itself, and an email address or URL wrapped at any point
-/// ("hanako.yamada@" / "example.com", "hanako.yam" / "ada@example.com"). "Below" is the same
-/// column: same left edge, similar height, line spacing apart. Only one line further, from
-/// lines whose own text matched, so a long paragraph is not swallowed.
-/// - the line below an address: the whole line
-/// - the line below one ending with an email address or URL, complete or not: its first word
-///   (letters, digits, symbols), and that unfinished end too
-/// - a line starting with a word with "@": the last word of the line above
+/// that matches no pattern by itself, and an email address, URL or number wrapped at any
+/// point ("hanako.yamada@" / "example.com", "example" / ".com/yamada", "sato.ichi" /
+/// "ro@example.jp", "080-0000-" / "2222"). Only one line further, from lines whose own text
+/// matched, so a long paragraph is not swallowed.
+/// - the line below an address, in the same column: the whole line
+/// - two lines whose last and first words, joined, make an email address, URL or number
+///   across the join: both words. The lower line may be indented (a value column).
 private func addContinuations(_ tracks: inout [TextTrack], times: [Double], extend: Double, bounds: CGRect, size: CGSize) {
     let readings = tracks.map(distinctReadings)
-    let endsWrapped: [TextKind?] = readings.map { rs in rs.lazy.compactMap { wrapKind(endOf: $0.string) }.first }
-    let endsInWord = readings.map { rs in rs.contains { trailingWord($0.string) != nil } }
-    let startsWithAt = readings.map { rs in rs.contains { s in leadingWord(s.string).map { s.string[$0].contains("@") } ?? false } }
+    let lasts: [[(TextSample, Range<String.Index>)]] = readings.map { $0.compactMap { s in trailingWord(s.string).map { (s, $0) } } }
+    let firsts: [[(TextSample, Range<String.Index>)]] = readings.map { $0.compactMap { s in leadingWord(s.string).map { (s, $0) } } }
     var changes: [(Int, TextKind, [CGRect])] = []
-    func words(_ k: Int, _ find: (String) -> Range<String.Index>?) -> [CGRect] {
-        readings[k].compactMap { s in find(s.string).map { relativeBox(s, range: $0, size: size) ?? whole } }
-    }
     for a in tracks.indices {
         let address = tracks[a].parts[.address] != nil
-        guard address || endsWrapped[a] != nil || endsInWord[a] else { continue }
-        for b in tracks.indices where b != a {
-            guard address || endsWrapped[a] != nil || startsWithAt[b],
-                  isLine(tracks[b], below: tracks[a], times: times, extend: extend, bounds: bounds)
+        guard address || !lasts[a].isEmpty else { continue }
+        let (ta0, ta1) = (times[tracks[a].first] - extend, times[tracks[a].last] + extend)
+        for b in tracks.indices where b != a && (address || !firsts[b].isEmpty) {
+            // On screen at the same time (cheap, before comparing words or places).
+            guard ta0 <= times[tracks[b].last], times[tracks[b].first] <= ta1 else { continue }
+            if address, isLine(tracks[b], below: tracks[a], times: times, extend: extend, bounds: bounds, indented: false) {
+                changes.append((b, .address, [whole]))
+            }
+            guard !lasts[a].isEmpty, !firsts[b].isEmpty else { continue }
+            var found: [(TextKind, TextSample, Range<String.Index>, TextSample, Range<String.Index>)] = []
+            for (sa, ra) in lasts[a] {
+                for (sb, rb) in firsts[b] {
+                    if let kind = wrappedKind(String(sa.string[ra]), String(sb.string[rb])) { found.append((kind, sa, ra, sb, rb)) }
+                }
+            }
+            guard !found.isEmpty, isLine(tracks[b], below: tracks[a], times: times, extend: extend, bounds: bounds, indented: true)
             else { continue }
-            if address { changes.append((b, .address, [whole])) }
-            if let kind = endsWrapped[a] {
-                changes.append((b, kind, words(b, leadingWord)))
-                changes.append((a, kind, words(a, trailingWord)))
-            } else if startsWithAt[b] {
-                changes.append((a, .email, words(a, trailingWord)))
-                changes.append((b, .email, words(b, leadingWord)))
+            for (kind, sa, ra, sb, rb) in found {
+                changes.append((a, kind, [relativeBox(sa, range: ra, size: size) ?? whole]))
+                changes.append((b, kind, [relativeBox(sb, range: rb, size: size) ?? whole]))
             }
         }
     }
@@ -511,35 +514,51 @@ private func addContinuations(_ tracks: inout [TextTrack], times: [Double], exte
     }
 }
 
-private let wordChars = "[A-Za-z0-9._%+\\-/@＠?=&#~:]+"
+/// Letters, digits and the symbols of addresses, URLs and numbers; "@" may have spaces
+/// around it as read ("hanako.yamada @").
+private let wordChars = "(?:[A-Za-z0-9０-９._%+\\-‐－ー−/?=&#~:]|\\s?[@＠]\\s?)+"
 
-/// The first word of letters, digits and symbols (the rest of a wrapped address or URL).
+/// The first word of letters, digits and symbols of a line.
 func leadingWord(_ s: String) -> Range<String.Index>? {
-    s.range(of: "^\\s*" + wordChars, options: .regularExpression)
+    guard let r = s.range(of: "^\\s*" + wordChars, options: .regularExpression) else { return nil }
+    let start = s[r].firstIndex { !$0.isWhitespace } ?? r.lowerBound
+    return start..<r.upperBound
 }
 
-/// The last word of letters, digits and symbols.
+/// The last word of letters, digits and symbols of a line.
 func trailingWord(_ s: String) -> Range<String.Index>? {
-    s.range(of: wordChars + "\\s*$", options: .regularExpression)
+    guard let r = s.range(of: wordChars + "\\s*$", options: .regularExpression) else { return nil }
+    var end = r.upperBound
+    while end > r.lowerBound, s[s.index(before: end)].isWhitespace { end = s.index(before: end) }
+    return r.lowerBound..<end
 }
 
-/// The kind of information the line ends with, when it may continue on the next line: an
-/// email address or URL reaching the end, or the unfinished start of one ("name@",
-/// "name@exam", "https://").
-func wrapKind(endOf s: String) -> TextKind? {
-    for (kind, r) in findKinds(in: s) where kind == .email || kind == .url {
-        if s[r.upperBound...].allSatisfy(\.isWhitespace) { return kind }
+/// The kind of information that `upper` (the end of a line) and `lower` (the start of the
+/// next) make when joined, if a match crosses the join.
+func wrappedKind(_ upper: String, _ lower: String) -> TextKind? {
+    let u = upper.filter { !$0.isWhitespace }, l = lower.filter { !$0.isWhitespace }
+    guard !u.isEmpty, !l.isEmpty else { return nil }
+    let joined = u + l
+    let join = joined.index(joined.startIndex, offsetBy: u.count)
+    for kind in [TextKind.email, .url, .number] {
+        for (k, r) in findKinds(in: joined) where k == kind && r.lowerBound < join && r.upperBound > join {
+            return kind
+        }
     }
-    if s.range(of: "[A-Za-z0-9._%+\\-]+\\s?[@＠]\\s?[A-Za-z0-9.\\-]*\\s*$", options: .regularExpression) != nil { return .email }
-    if s.range(of: "(?i)(?:https?:/{0,2}|www\\.?)\\s*$", options: .regularExpression) != nil { return .url }
     return nil
 }
 
-/// `b` is the next line under `a` in the same column, at a frame where both are on screen
-/// (each continued `extend` seconds, as when hidden): one where both were read if there is
-/// one, else one where either was read (the other's place interpolated or held).
-private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend: Double, bounds: CGRect) -> Bool {
+/// `b` is the next line under `a`, at a frame where both are on screen (each continued
+/// `extend` seconds, as when hidden): one where both were read if there is one, else one
+/// where either was read (the other's place interpolated, or held where it was read: while
+/// scrolling, two lines read once each at different frames are not matched). Same left edge,
+/// or with `indented` anywhere under `a` (a wrapped value in a column of values).
+private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend: Double, bounds: CGRect, indented: Bool) -> Bool {
     guard times[a.first] - extend <= times[b.last], times[b.first] - extend <= times[a.last] else { return false }
+    // Both read several times, never at the same time: one screen replaced the other (a lock
+    // screen after the passcode screen), they were not shown together. A line read only once
+    // (fast scrolling, glare) still counts with `extend`.
+    if a.samples.count > 1, b.samples.count > 1, a.last < b.first || b.last < a.first { return false }
     let fa = Set(a.sampleFrames), fb = Set(b.sampleFrames)
     let both = fa.intersection(fb)
     for f in both.sorted() + fa.symmetricDifference(fb).sorted() {
@@ -548,7 +567,8 @@ private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend:
         else { continue }
         let h = ra.height
         let gap = ra.minY - rb.maxY  // Core Image coordinates: y grows upward
-        if gap > -0.3 * h, gap < 0.8 * h, abs(rb.minX - ra.minX) < 1.5 * h, rb.height > 0.7 * h, rb.height < 1.4 * h {
+        let column = indented ? rb.minX > ra.minX - 1.5 * h && rb.minX < ra.maxX : abs(rb.minX - ra.minX) < 1.5 * h
+        if gap > -0.3 * h, gap < 0.8 * h, column, rb.height > 0.7 * h, rb.height < 1.4 * h {
             return true
         }
     }
@@ -771,5 +791,19 @@ func selfCheckMask() -> [String] {
     var tracks2 = [once, onceBelow]
     addContinuations(&tracks2, times: times, extend: 0.35, bounds: bounds, size: size)
     expect(tracks2[1].parts[.address] != nil, "address: lines read once at different frames")
+    // A line that left just before the address appeared at the same place (passcode screen →
+    // lock screen) was never shown with it.
+    var later = TextTrack(id: 0, samples: [
+        TextSample(frame: 20, rect: CGRect(x: 100, y: 600, width: 120, height: 40), string: "東京都", text: nil),
+        TextSample(frame: 30, rect: CGRect(x: 100, y: 600, width: 120, height: 40), string: "東京都", text: nil),
+    ])
+    later.parts = [.address: [CGRect(x: 0, y: 0, width: 1, height: 1)]]
+    let before = TextTrack(id: 1, samples: [
+        TextSample(frame: 10, rect: CGRect(x: 100, y: 550, width: 500, height: 40), string: "パスコードを入力", text: nil),
+        TextSample(frame: 17, rect: CGRect(x: 100, y: 550, width: 500, height: 40), string: "パスコードを入力", text: nil),
+    ])
+    var tracks3 = [later, before]
+    addContinuations(&tracks3, times: times, extend: 0.35, bounds: bounds, size: size)
+    expect(tracks3[1].parts[.address] == nil, "address: a line gone before the address appeared is not hidden")
     return failures
 }
