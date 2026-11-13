@@ -31,10 +31,13 @@ jobs:
           codesign --verify --deep --strict "build/モザイぷーん.app"
           SHA=$(shasum -a 256 "$ZIP" | awk '{print $1}')
           { cat ".github/release-notes/$GITHUB_REF_NAME.md"; printf '\nSHA-256: `%s`\n' "$SHA"; } > "$RUNNER_TEMP/notes.md"
+          # Also under a name without the version, for the README's direct link
+          # (releases/latest/download/Mozaipoon.zip).
+          cp "$ZIP" build/Mozaipoon.zip
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "モザイぷーん ${GITHUB_REF_NAME#v}" \
-            --notes-file "$RUNNER_TEMP/notes.md" "$ZIP"
+            --notes-file "$RUNNER_TEMP/notes.md" "$ZIP" build/Mozaipoon.zip
