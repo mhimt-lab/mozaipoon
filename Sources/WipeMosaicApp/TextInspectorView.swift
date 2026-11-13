@@ -237,13 +237,10 @@ private struct TextLineRow: View {
         let whole = video.textLines.contains(entry.id)
         let partly = !whole && (video.textMask?.hidden.contains(entry.id) ?? false)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Toggle(isOn: Binding(get: { whole }, set: { model.setTextLine(entry.id, $0) })) {
-                EmptyView()
-            }
-            .toggleStyle(.checkbox)
-            .labelsHidden()
-            .accessibilityLabel(entry.text)
-            .help(whole ? "押すと、行全体のモザイクを外します" : "押すと、行全体にモザイクをかけます")
+            Toggle(entry.text, isOn: Binding(get: { whole }, set: { model.setTextLine(entry.id, $0) }))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .help(whole ? "押すと、行全体のモザイクを外します" : "押すと、行全体にモザイクをかけます")
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.text)
                     .lineLimit(2)
