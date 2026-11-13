@@ -96,7 +96,7 @@ Developer ID の署名と公証をしていないため、ダウンロードし�
 
 ## テスト（ダミー素材）
 
-`testdata/` の人物はすべて AI で生成した架空の人物、または scikit-image 同梱の NASA の写真（パブリックドメイン）。`prores.mov`（66MB）は大きいためリポジトリに含めていない。
+テスト素材はリポジトリに含めていない（開発者の手元の `testdata/` に置く。`.gitignore` 済み）。人物はすべて AI で生成した架空の人物、または scikit-image 同梱の NASA の写真（パブリックドメイン）。画面の文字のテスト動画 `screen.mov` だけは、`node scripts/make-screen-sample.mjs` で作れる（Playwright と Google Chrome、ffmpeg が必要）。
 
 ```sh
 B=.build/release/wipe-mosaic
@@ -109,7 +109,7 @@ $B run testdata/people.mov testdata/out/p.mov --people 2 --report testdata/out/p
 $B run testdata/sample.mov testdata/out/result.mov --wipe 1480,640,400,400 --report testdata/out/report.csv --overwrite
 awk -F, 'NR>1{e=($1>=5.0)?3:2; if($2==e&&$3==1)ok++; n++} END{print "match " ok "/" n}' testdata/out/report.csv
 # 画面の文字: screen.mov は架空の個人情報を表示したチャット画面（0〜2秒静止、2〜5秒スクロール、5.5〜7.8秒通知）
-# 作り直すときは node scripts/make-screen-sample.mjs（testdata/screen/phone.html から作る）
+# node scripts/make-screen-sample.mjs で作る（scripts/screen-sample/phone.html から）
 $B text testdata/screen.mov --words 山田,佐藤,鈴木 --list        # hidden 13 lines
 $B run testdata/screen.mov testdata/out/s.mov --screen-text --words 山田,佐藤,鈴木 --report testdata/out/s.csv --overwrite
 awk -F, 'NR>1{if($5>0)ok++; n++} END{print "frames with text boxes " ok "/" n}' testdata/out/s.csv   # 270/270

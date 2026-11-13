@@ -1,9 +1,8 @@
 .build/
 build/
-testdata/out/
+# Test material for developers (kept locally, not in the repository)
+testdata/
 .DS_Store
 # Icon drafts (only AppIcon.svg / AppIcon.png are the source of the app icon)
 assets/icon/v*.svg
 assets/icon/v*.png
-# Too large for the repository (66 MB); regenerate with ffmpeg if needed
-testdata/prores.mov
