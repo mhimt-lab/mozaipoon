@@ -1,0 +1,39 @@
+<!doctype html><meta charset="utf-8"><style>
+*{box-sizing:border-box}html,body{margin:0;width:393px;height:852px;overflow:hidden;background:#fff;font-family:"Hiragino Sans",sans-serif;color:#111}
+.status{position:absolute;top:0;left:0;right:0;height:54px;display:flex;justify-content:space-between;align-items:center;padding:14px 32px 0;font-weight:600;font-size:17px;z-index:5;background:#fff}
+.head{position:absolute;top:54px;left:0;right:0;height:64px;border-bottom:1px solid #ddd;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#f7f7f7;z-index:4}
+.head b{font-size:17px}.head small{font-size:12px;color:#888}
+#list{position:absolute;top:118px;left:0;right:0;padding:12px 14px 400px}
+.m{max-width:78%;padding:9px 13px;border-radius:18px;margin:8px 0;font-size:16px;line-height:1.4;width:fit-content}
+.l{background:#e9e9eb}.r{background:#2f7cf6;color:#fff;margin-left:auto}
+.t{text-align:center;font-size:12px;color:#888;margin:14px 0}
+#note{position:absolute;left:10px;right:10px;top:-120px;background:rgba(240,240,240,.97);border-radius:20px;padding:12px 14px;box-shadow:0 6px 20px rgba(0,0,0,.18);z-index:9;font-size:14px}
+#note b{display:block;font-size:15px}
+</style>
+<div class="status"><span>9:41</span><span>●●● 5G 87%</span></div>
+<div class="head"><b>山田 花子</b><small>メッセージ</small></div>
+<div id="list">
+<div class="t">今日 10:24</div>
+<div class="m l">おはようございます！来週の打ち合わせの件です</div>
+<div class="m r">おはようございます。よろしくお願いします</div>
+<div class="m l">送り先の住所は 〒100-0000 東京都みほん区サンプル町1-2-3 テストハイツ402 です</div>
+<div class="m r">ありがとうございます。電話番号も教えてください</div>
+<div class="m l">090-0000-1111 です。メールは hanako.yamada@example.com でお願いします</div>
+<div class="m r">了解です。資料はこちらに置きました https://example.com/share/abc123</div>
+<div class="m l">お支払いはカード 4111 1111 1111 1111 で大丈夫ですか？</div>
+<div class="m r">はい、大丈夫です</div>
+<div class="m l">会員番号は A-00001234 です。当日は 鈴木 次郎 も同席します</div>
+<div class="m r">承知しました。楽しみにしています</div>
+<div class="m l">天気がよければ、駅から歩いて行きますね</div>
+<div class="m r">はい、気をつけて来てください</div>
+</div>
+<div id="note"><b>佐藤 一郎</b>明日の件、080-0000-2222 に電話ください</div>
+<script>
+function setT(t){
+  const s = t<2?0: t<5? (t-2)/3*360 : 360;
+  document.getElementById('list').style.transform='translateY('+(-s)+'px)';
+  let y=-120; if(t>=5.5&&t<5.9) y=-120+(t-5.5)/0.4*176; else if(t>=5.9&&t<7.4) y=56; else if(t>=7.4&&t<7.8) y=56-(t-7.4)/0.4*176;
+  document.getElementById('note').style.top=y+'px';
+}
+setT(0);
+</script>

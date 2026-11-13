@@ -6,6 +6,8 @@
 wipe-mosaic people <動画> [-o <サムネイル保存先>] [--photo <写真>]... [--match <別の動画>]   # 映っている人の一覧
 wipe-mosaic run <動画> <出力> --people 1,3 [--report faces.csv]       # 人物1と3にモザイク
 wipe-mosaic run <動画> <出力> --wipe x,y,w,h                          # ワイプ方式（下）
+wipe-mosaic run <動画> <出力> --screen-text [--words 山田,花子]      # 画面の文字の個人情報（下）
+wipe-mosaic text <動画> [--words 山田,花子] [--list]                  # 画面の文字の件数（--list で文字も出す）
 wipe-mosaic info <動画>                                               # サイズ・長さ・fps（JSON）
 ```
 
@@ -20,3 +22,12 @@ wipe-mosaic info <動画>                                               # サイ
 位置は動画のピクセル単位で左上原点の `x,y,幅,高さ`。`wipe-mosaic preview <動画> --wipe ... --at 秒 -o check.png` で確認できる。
 `--min-inside`（0.8）でワイプ内とみなす割合、`--keep-all-in-wipe` でワイプ内の顔を全員残す。
 
+
+## 画面の文字（`--screen-text`）
+
+画面録画向け。画面の文字を読み取り、電話番号・カード番号などの数字（6桁以上）・メールアドレス・URL・住所と郵便番号の部分にモザイクをかける。`--people` と一緒に使える。
+
+- `--text-kinds number,email,url,address`：自動で隠す種類（既定はすべて、`none` で自動で隠さない）
+- `--words 山田,花子`：この言葉の部分も隠す（空白の有無と大文字・小文字は区別しない）
+- `--lines 3,5`：この行を行全体で隠す（番号は `wipe-mosaic text <動画> --list` で出る）
+- `text` は件数だけを出す。`--list` を付けたときだけ、読み取った文字を出す

@@ -42,6 +42,15 @@ macOS（AVFoundation）で読める形式はそのまま開ける。2026-11-12 �
    - 同じ人の2つのトラックの間が 2 秒以内なら、その間も補間した位置（1.3 倍）にモザイクを続ける
    - 顔が現れる前と消えた後も、既定 1 秒はその位置にモザイクを残す
 
+## 画面の文字の仕組み
+
+1. 全フレームをデコードし、160px 幅に縮めた白黒の画像で前に読み取ったフレームと比べる。変わっていなければ読み取りを省き、前の結果を使う。変わっていれば最短 0.1 秒おきに Vision の文字認識（`VNRecognizeTextRequest`、accurate、日本語と英語、言語補正なし）で行を読む。1 フレームあたり 150〜330ms（886×1920）で、並列にしても速くならなかった（2026-11-13 計測）。`.fast` は日本語を読めない
+2. 止まっていた場面が動き出すときは、動き出す直前のフレームにも前の結果を置き、止まっていた間の位置を固定する
+3. 読み取ったフレームどうしで行をつなぎ「トラック」にする（文字の近さ＝編集距離 0.6 以上、位置、高さで対応づけ）。2 回続けて読み落としてもつなぐ。数えるのはフレーム数ではなく読み取った回数（止まっている間は読み取らないため）
+4. 読み取ったフレームの間は位置を補間する。最初と最後は、動きを延長して 0.1 秒＋1 フレーム分だけ前後にも隠す（その間に出てきた・消えた行）
+5. 行ごとに、読み違いを含むすべての読み方を正規表現で調べ、個人情報の部分を行の箱に対する割合で覚える。どこかのフレームで正しく読めていれば、その行のトラック全体で隠す。隠す範囲は行の高さに対して左右 35%・上下 30% 広げる
+6. 書き出しと「モザイクあり」の表示には、顔の箱（`FrameFaces.mosaic`、広さ pad を足す）とは別の欄（`FrameFaces.exact`、そのまま描く）で渡す
+
 ## 速さについて
 
 顔の検索で時間がかかるのは Vision の顔検出の呼び出しで、1 回あたりの時間はほぼ一定（1080p で約 5〜8ms）。並列に投げても、Neural Engine・GPU・CPU に振り分けても速くならなかった（2026-11-12 計測）。そのため、呼び出しの回数を減らしている：
@@ -95,5 +104,10 @@ $B run testdata/people.mov testdata/out/p.mov --people 2 --report testdata/out/p
 # ワイプ方式の回帰: t<5s はモザイク2・本人1、t>=5s はモザイク3・本人1
 $B run testdata/sample.mov testdata/out/result.mov --wipe 1480,640,400,400 --report testdata/out/report.csv --overwrite
 awk -F, 'NR>1{e=($1>=5.0)?3:2; if($2==e&&$3==1)ok++; n++} END{print "match " ok "/" n}' testdata/out/report.csv
+# 画面の文字: screen.mov は架空の個人情報を表示したチャット画面（0〜2秒静止、2〜5秒スクロール、5.5〜7.8秒通知）
+# 作り直すときは node scripts/make-screen-sample.mjs（testdata/screen/phone.html から作る）
+$B text testdata/screen.mov --words 山田,佐藤,鈴木 --list        # hidden 12 lines
+$B run testdata/screen.mov testdata/out/s.mov --screen-text --words 山田,佐藤,鈴木 --report testdata/out/s.csv --overwrite
+awk -F, 'NR>1{if($5>0)ok++; n++} END{print "frames with text boxes " ok "/" n}' testdata/out/s.csv   # 270/270
 ```
 

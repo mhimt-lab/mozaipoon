@@ -187,6 +187,17 @@ struct FaceIndex: Sendable {
         }
         return rects
     }
+
+    /// Boxes for the frame shown at `t` that are drawn without the face margin.
+    func exactRects(at t: Double) -> [CGRect] {
+        guard !frames.isEmpty else { return [] }
+        return frames[max(0, firstIndex(atOrAfter: t + 1e-3) - 1)].exact
+    }
+
+    /// Everything to mosaic at `t`: faces (± hold, with the margin) and the exact boxes.
+    func allRects(at t: Double, hold: Double, pad: Double) -> [CGRect] {
+        mosaicRects(at: t, hold: hold).map { padded($0, pad) } + exactRects(at: t)
+    }
 }
 
 /// Wipe mode pass 1: decode every frame and classify faces.

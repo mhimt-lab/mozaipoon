@@ -189,7 +189,7 @@ public func writeMosaic(
                     guard let src = CMSampleBufferGetImageBuffer(sample) else { continue }
                     let pts = CMSampleBufferGetPresentationTimeStamp(sample)
                     let ok: Bool = autoreleasepool {
-                        let rects = index.mosaicRects(at: pts.seconds, hold: hold).map { padded($0, pad) }
+                        let rects = index.allRects(at: pts.seconds, hold: hold, pad: pad)
                         if rects.isEmpty { return adaptor.append(src, withPresentationTime: pts) }
                         guard let pool = adaptor.pixelBufferPool else { return false }
                         var dst: CVPixelBuffer?

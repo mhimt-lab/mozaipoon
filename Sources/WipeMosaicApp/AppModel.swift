@@ -23,6 +23,11 @@ enum Accuracy: Int, CaseIterable, Identifiable {
     }
 }
 
+/// What the inspector lists.
+enum InspectorTab: Hashable {
+    case people, text
+}
+
 /// What the viewer shows.
 enum ViewMode: Hashable {
     case original, mosaic, result
@@ -67,6 +72,21 @@ final class AppModel {
         }
     }
 
+    /// Kinds of personal information hidden automatically in on-screen text (all videos).
+    var textKinds: Set<TextKind> = AppModel.storedKinds() {
+        didSet {
+            UserDefaults.standard.set(textKinds.map(\.rawValue).sorted(), forKey: Keys.textKinds)
+            updateTextMasks()
+        }
+    }
+    /// Words (names, account names…) hidden wherever they appear on screen (all videos).
+    var textWords: [String] = UserDefaults.standard.stringArray(forKey: Keys.textWords) ?? [] {
+        didSet {
+            UserDefaults.standard.set(textWords, forKey: Keys.textWords)
+            updateTextMasks()
+        }
+    }
+
     // MARK: Registered photos
     var registered: [RegisteredFace] = FaceStore.loadAll()
     var registerMessages: [String] = []
@@ -101,16 +121,28 @@ final class AppModel {
         didSet { UserDefaults.standard.set(mosaicExpanded, forKey: "mosaicExpanded") }
     }
     var showInspector = true
+    var inspectorTab: InspectorTab = .people
+    /// The word being typed in the text tab, and whether its rarely seen lines are shown.
+    var textWordDraft = ""
+    var showTextFlashes = false
 
     // MARK: Queues
     @ObservationIgnored private var analysisTask: Task<Void, Never>?
     private var analyzingID: UUID?
+    @ObservationIgnored private var textTask: Task<Void, Never>?
+    private var textScanningID: UUID?
     @ObservationIgnored private var exportTask: Task<Void, Never>?
     /// (done, total) of the running export queue.
     var exportProgress: (done: Int, total: Int)?
 
     private enum Keys {
         static let accuracy = "accuracy", hold = "hold", pad = "pad", autoBlock = "autoBlock", block = "block"
+        static let textKinds = "textKinds", textWords = "textWords"
+    }
+
+    private static func storedKinds() -> Set<TextKind> {
+        guard let raw = UserDefaults.standard.stringArray(forKey: Keys.textKinds) else { return Set(TextKind.allCases) }
+        return Set(raw.compactMap(TextKind.init(rawValue:)))
     }
 
     private static func stored(_ key: String, _ fallback: Double) -> Double {
@@ -299,6 +331,7 @@ final class AppModel {
         pendingRemoval = nil
         guard let idx = videos.firstIndex(where: { $0.id == id }), !videos[idx].job.isActive else { return }
         if analyzingID == id { analysisTask?.cancel() }
+        if textScanningID == id { textTask?.cancel() }
         let v = videos.remove(at: idx)
         v.close()
         if currentID == id {
@@ -494,6 +527,128 @@ final class AppModel {
     /// Hints only: a choice in one video never changes the selection of another one silently.
     private func updateCrossHints(except id: UUID? = nil) {
         for v in videos where v.id != id && v.analysis != nil { v.crossHints = crossHints(for: v) }
+    }
+
+    // MARK: - On-screen text (one video at a time, like faces)
+
+    /// Read the text on screen in `v` (queued if another video is being read).
+    func scanText(_ v: VideoItem) {
+        guard v.isReady, v.textScanning == nil, v.textState != .waiting else { return }
+        v.text = nil
+        v.textMask = nil
+        v.textOptions = nil
+        v.textLines = []
+        v.textState = .waiting
+        processTextQueue()
+    }
+
+    func cancelTextScan() {
+        guard let id = current?.id else { return }
+        if textScanningID == id {
+            textTask?.cancel()
+        } else if let v = current, v.textState == .waiting {
+            v.textState = .cancelled
+        }
+    }
+
+    private func processTextQueue() {
+        guard textTask == nil else { return }
+        let next = current.flatMap { $0.textState == .waiting ? $0 : nil } ?? videos.first { $0.textState == .waiting }
+        guard let v = next, let i = v.info else { return }
+        let id = v.id
+        let a = v.asset
+        v.textState = .running(0)
+        textScanningID = id
+        textTask = Task.detached(priority: .userInitiated) { [weak self] in
+            weak let model = self
+            let total = max(1, Int((i.fps * i.duration).rounded()))
+            var last = Date.distantPast
+            do {
+                let text = try analyzeText(asset: a, info: i) { n in
+                    let now = Date()
+                    guard now.timeIntervalSince(last) > 0.1 else { return }
+                    last = now
+                    let p = min(0.99, Double(n) / Double(total))
+                    Task { @MainActor in model?.textProgress(id, p) }
+                }
+                await model?.finishTextScan(id, .success(text))
+            } catch {
+                let cancelled = error is CancellationError || Task.isCancelled
+                await model?.finishTextScan(id, .failure(cancelled ? CancellationError() : error))
+            }
+        }
+    }
+
+    private func textProgress(_ id: UUID, _ p: Double) {
+        guard let v = videos.first(where: { $0.id == id }), v.textScanning != nil else { return }
+        v.textState = .running(p)
+    }
+
+    private func finishTextScan(_ id: UUID, _ result: Result<ScreenText, Error>) {
+        if textScanningID == id {
+            textTask = nil
+            textScanningID = nil
+        }
+        if let v = videos.first(where: { $0.id == id }) {
+            switch result {
+            case .success(let text):
+                v.text = text
+                v.textState = .done
+                updateTextMask(v)
+            case .failure(let error) where error is CancellationError:
+                v.textState = .cancelled
+            case .failure(let error):
+                v.textState = .failed(Self.describe(error))
+            }
+        }
+        processTextQueue()
+    }
+
+    private func updateTextMasks() {
+        for v in videos where v.text != nil { updateTextMask(v) }
+    }
+
+    private func updateTextMask(_ v: VideoItem) {
+        guard let text = v.text else { return }
+        let o = TextMaskOptions(kinds: textKinds, words: textWords, lines: v.textLines)
+        v.textOptions = o
+        v.textMask = text.mask(o)
+        if v.id == currentID { refreshLive() }
+    }
+
+    /// Hide or show a whole line of the current video (undoable).
+    func setTextLine(_ entry: Int, _ on: Bool) {
+        guard let v = current else { return }
+        var s = v.textLines
+        if on { s.insert(entry) } else { s.remove(entry) }
+        applyTextLines(s, to: v, action: on ? "行にモザイクをかける" : "行のモザイクを外す")
+    }
+
+    private func applyTextLines(_ lines: Set<Int>, to v: VideoItem, action: String) {
+        let old = v.textLines
+        guard old != lines else { return }
+        v.textLines = lines
+        updateTextMask(v)
+        guard let um = undoManager else { return }
+        let id = v.id
+        um.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated {
+                guard let v = model.videos.first(where: { $0.id == id }), v.text != nil else { return }
+                if model.currentID != id { model.currentID = id }
+                model.applyTextLines(old, to: v, action: action)
+            }
+        }
+        um.setActionName(action)
+    }
+
+    func addTextWord(_ word: String) {
+        let w = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !w.isEmpty, !textWords.contains(w) else { return }
+        textWords.append(w)
+    }
+
+    func removeTextWord(_ word: String) {
+        textWords.removeAll { $0 == word }
     }
 
     // MARK: - Player
@@ -705,6 +860,7 @@ final class AppModel {
         let render = render(for: v)
         let selection = v.selected
         let params = mosaicParams
+        let textOptions = v.effectiveTextOptions
         let started = Date()
         v.summary = nil
         v.resultItem = nil
@@ -720,8 +876,8 @@ final class AppModel {
             }
             v.summary = JobSummary(
                 output: out, format: format, frames: frames.count,
-                mosaicFrames: frames.filter { !$0.mosaic.isEmpty }.count, dips: findDips(frames),
-                elapsed: Date().timeIntervalSince(started), selection: selection, params: params)
+                mosaicFrames: frames.filter { !$0.mosaic.isEmpty || !$0.exact.isEmpty }.count, dips: findDips(frames),
+                elapsed: Date().timeIntervalSince(started), selection: selection, params: params, text: textOptions)
             v.resultItem = AVPlayerItem(url: out)
             v.job = .done
         } catch {

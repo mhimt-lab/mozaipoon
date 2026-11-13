@@ -165,10 +165,11 @@ private struct ExportRow: View {
     }
 
     private var detail: String {
-        guard let a = video.analysis else { return "" }
-        if a.people.isEmpty { return "顔が見つかりませんでした" }
-        if video.selected.isEmpty { return "人を選んでいません" }
-        let base = "\(a.people.count)人中 \(video.selected.count)人にモザイク"
+        if !video.hasChoices {
+            guard let a = video.analysis else { return "" }
+            return a.people.isEmpty ? "顔が見つかりませんでした" : "人を選んでいません"
+        }
+        let base = video.choiceSummary
         if video.job == .done, !video.resultIsStale(model.mosaicParams) { return base + "・書き出し済み" }
         return base
     }

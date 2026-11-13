@@ -28,8 +28,8 @@ public final class LiveMosaic: @unchecked Sendable {
             let (index, render, enabled) = lock.withLock { (self.index, self.render, self.enabled) }
             let origin = source.extent.origin
             let rects = enabled
-                ? index.mosaicRects(at: request.compositionTime.seconds, hold: render.hold).map {
-                    padded($0, render.pad).offsetBy(dx: origin.x, dy: origin.y)
+                ? index.allRects(at: request.compositionTime.seconds, hold: render.hold, pad: render.pad).map {
+                    $0.offsetBy(dx: origin.x, dy: origin.y)
                 } : []
             guard !rects.isEmpty else {
                 request.finish(with: source, context: nil)

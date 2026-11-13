@@ -120,14 +120,16 @@ private struct VideoRow: View {
             StatusLabel("開けません", systemImage: "exclamationmark.triangle.fill", tint: .red, emphasized: true)
         case .done:
             if let a = video.analysis {
-                if a.people.isEmpty {
+                if video.hasChoices {
+                    if video.job == .done, !video.resultIsStale(model.mosaicParams) {
+                        StatusLabel("書き出し済み", systemImage: "checkmark.circle.fill", tint: .green)
+                    } else {
+                        StatusLabel(video.choiceSummary, systemImage: "eye.slash")
+                    }
+                } else if a.people.isEmpty {
                     StatusLabel("顔が見つかりません", systemImage: "person.crop.circle.badge.questionmark")
-                } else if video.selected.isEmpty {
-                    StatusLabel("\(a.people.count)人中 0人にモザイク", systemImage: "circle.dashed")
-                } else if video.job == .done, !video.resultIsStale(model.mosaicParams) {
-                    StatusLabel("書き出し済み", systemImage: "checkmark.circle.fill", tint: .green)
                 } else {
-                    StatusLabel("\(a.people.count)人中 \(video.selected.count)人にモザイク", systemImage: "eye.slash")
+                    StatusLabel("\(a.people.count)人中 0人にモザイク", systemImage: "circle.dashed")
                 }
             }
         }

@@ -38,6 +38,8 @@ struct JobSummary {
     let elapsed: TimeInterval
     let selection: Set<Int>
     let params: MosaicParams
+    /// What was hidden in on-screen text (nil: nothing).
+    let text: TextMaskOptions?
 }
 
 /// One video in the list, with its own faces, selection, player item and export result.
@@ -74,6 +76,15 @@ final class VideoItem: Identifiable {
     var job: JobState = .idle
     var summary: JobSummary?
 
+    // On-screen text (screen recordings). nil state: not searched yet.
+    var textState: AnalysisState?
+    var text: ScreenText?
+    /// Lines hidden whole (entry ids).
+    var textLines: Set<Int> = []
+    /// Boxes for the current text options (kinds and words are app-wide, lines per video).
+    var textMask: TextMask?
+    var textOptions: TextMaskOptions?
+
     init(url: URL) {
         self.url = url
         scoped = url.startAccessingSecurityScopedResource()
@@ -89,13 +100,29 @@ final class VideoItem: Identifiable {
     var analyzing: Double? { if case .running(let p) = state { p } else { nil } }
     var isReady: Bool { info != nil }
 
+    var textScanning: Double? { if case .running(let p) = textState { p } else { nil } }
+    /// Text lines with something hidden.
+    var hiddenTextCount: Int { textMask?.hidden.count ?? 0 }
+    /// The text options in effect for export (nil when no text is hidden).
+    var effectiveTextOptions: TextMaskOptions? { hiddenTextCount > 0 ? textOptions : nil }
+    /// Something to mosaic: chosen people or hidden text.
+    var hasChoices: Bool { (analysis != nil && !selected.isEmpty) || hiddenTextCount > 0 }
+
     func resultIsStale(_ params: MosaicParams) -> Bool {
-        summary.map { $0.selection != selected || $0.params != params } ?? false
+        summary.map { $0.selection != selected || $0.params != params || $0.text != effectiveTextOptions } ?? false
     }
     func hasUnexportedWork(_ params: MosaicParams) -> Bool {
-        analysis != nil && !selected.isEmpty && (summary == nil || resultIsStale(params))
+        hasChoices && (summary == nil || resultIsStale(params))
     }
-    var canExport: Bool { analysis != nil && !selected.isEmpty && !job.isActive }
+    var canExport: Bool { hasChoices && !job.isActive }
+
+    /// "3人中 1人・文字 12行にモザイク" for the sidebar and the export sheet.
+    var choiceSummary: String {
+        var parts: [String] = []
+        if let a = analysis, !a.people.isEmpty, !selected.isEmpty { parts.append("\(a.people.count)人中 \(selected.count)人") }
+        if hiddenTextCount > 0 { parts.append("文字 \(hiddenTextCount)行") }
+        return parts.joined(separator: "・") + "にモザイク"
+    }
 
     var subtitle: String {
         guard let i = info else { return "" }
@@ -157,6 +184,8 @@ final class VideoItem: Identifiable {
     }
 
     func frames(hold: Double) -> [FrameFaces] {
-        analysis?.frames(selected: selected, endHold: hold) ?? []
+        let faces = analysis?.frames(selected: selected, endHold: hold) ?? []
+        guard let text, let mask = textMask, !mask.isEmpty else { return faces }
+        return withText(faces, text: text, mask: mask)
     }
 }

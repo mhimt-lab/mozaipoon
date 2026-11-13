@@ -19,6 +19,7 @@ do {
     case .facesDist(let urls): try printFaceDistances(urls)
     case .people(let input, let outDir, let render, let photos, let match):
         try await listPeople(input: input, outDir: outDir, render: render, photos: photos, match: match)
+    case .text(let input, let options, let list): try await listText(input: input, options: options, list: list)
     }
 } catch let e as ToolError {
     fail(e.description)

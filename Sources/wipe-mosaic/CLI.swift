@@ -36,9 +36,11 @@ func runMosaic(_ o: RunOptions) async throws {
         }
     }
 
-    let frames: [FrameFaces]
+    var frames: [FrameFaces]
     var extra = ""
-    if o.common.people.isEmpty {
+    if o.common.people.isEmpty && o.common.screenText {
+        frames = []
+    } else if o.common.people.isEmpty {
         let s = wipeSettings(o.common)
         try validateWipes(s.wipes, size: info.size)
         print("pass 1/2: detecting faces")
@@ -52,6 +54,14 @@ func runMosaic(_ o: RunOptions) async throws {
         guard missing.isEmpty else { throw ToolError("no such person: \(missing.sorted()) (found \(v.people.count))") }
         frames = v.frames(selected: o.common.people, endHold: o.common.render.hold)
         extra = "  people mosaicked:             \(o.common.people.sorted()) of \(v.people.count)\n"
+    }
+    if o.common.screenText {
+        print("pass 1/2: reading on-screen text")
+        let text = try analyzeText(asset: asset, info: info, progress: report)
+        let options = TextMaskOptions(kinds: o.common.textKinds, words: o.common.textWords, lines: o.common.textLines)
+        let mask = text.mask(options)
+        frames = withText(frames, text: text, mask: mask)
+        extra += "  text lines hidden:            \(mask.hidden.count) of \(text.entries.count)\n"
     }
     if o.progress { print("PROGRESS scan 1.0000") }
 
@@ -74,11 +84,12 @@ func runMosaic(_ o: RunOptions) async throws {
 
     if let report = o.report {
         // mosaic_boxes: x:y:w:h in video pixels, top-left origin, before --pad.
-        var csv = "time_sec,mosaic_faces,other_faces,mosaic_boxes\n"
+        var csv = "time_sec,mosaic_faces,other_faces,mosaic_boxes,text_boxes\n"
         let h = info.size.height
         for f in frames {
             let boxes = f.mosaic.map { String(format: "%.0f:%.0f:%.0f:%.0f", $0.minX, h - $0.maxY, $0.width, $0.height) }
-            csv += String(format: "%.3f,%d,%d,", f.time, f.mosaic.count, f.kept.count) + boxes.joined(separator: " ") + "\n"
+            csv += String(format: "%.3f,%d,%d,", f.time, f.mosaic.count, f.kept.count) + boxes.joined(separator: " ")
+                + ",\(f.exact.count)\n"
         }
         try csv.write(to: report, atomically: true, encoding: .utf8)
         print("report: \(report.path)")
@@ -91,6 +102,7 @@ func runMosaic(_ o: RunOptions) async throws {
           frames scanned:               \(frames.count)
           frames with mosaicked faces:  \(frames.filter { !$0.mosaic.isEmpty }.count) (max \(frames.map(\.mosaic.count).max() ?? 0) per frame)
           frames with other faces:      \(frames.filter { !$0.kept.isEmpty }.count)
+          frames with hidden text:      \(frames.filter { !$0.exact.isEmpty }.count)
         \(extra)  possible misses (count dips): \(dips.count)\(dips.prefix(10).map { String(format: " %.2fs", $0.start) }.joined())
         Review the output before publishing: detection can miss faces.
         """)
@@ -177,3 +189,27 @@ func writeFrame(input: URL, at: Double, output: URL) async throws {
     try writePNG(cg, to: output)
 }
 
+
+func listText(input: URL, options: TextMaskOptions, list: Bool) async throws {
+    guard FileManager.default.fileExists(atPath: input.path) else { throw ToolError("input not found: \(input.path)") }
+    let asset = AVURLAsset(url: input)
+    let info = try await loadVideo(asset)
+    let started = Date()
+    let text = try analyzeText(asset: asset, info: info) { _ in }
+    let elapsed = Date().timeIntervalSince(started)
+    let mask = text.mask(options)
+    let recognized = Set(text.tracks.flatMap { t in t.sampleFrames }).count
+    print(String(format: "text: %d lines (%d tracks), %d frames, recognized %d frames, %.1fs", text.entries.count,
+                 text.tracks.count, text.times.count, recognized, elapsed))
+    for k in TextKind.allCases {
+        print("  \(k.rawValue): \(text.entries.filter { $0.kinds.contains(k) }.count) lines")
+    }
+    print("  hidden with these options: \(mask.hidden.count) lines, word hits: \(mask.wordHits.count)")
+    print("  frames with hidden text: \(mask.frames.filter { !$0.isEmpty }.count)")
+    guard list else { return }
+    for e in text.entries {
+        let kinds = e.kinds.map(\.rawValue).sorted().joined(separator: ",")
+        print(String(format: "  %3d %6.2fs %5.1fs %@ [%@] ", e.id, text.times[e.firstFrame], Double(e.frameCount) / max(info.fps, 1),
+                     mask.hidden.contains(e.id) ? "H" : "-", kinds) + e.text)
+    }
+}

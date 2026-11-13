@@ -1,13 +1,34 @@
 import SwiftUI
 import WipeMosaicCore
 
-/// Right column: what was written, who to mosaic (the main task), and how long the mosaic stays.
-/// Each explanation sits right above the control it explains.
+/// Right column: what was written, what to mosaic (people's faces, or text on screen in
+/// screen recordings), and how the mosaic looks. Each explanation sits right above the
+/// control it explains.
 struct InspectorView: View {
     @Bindable var model: AppModel
     @Bindable var video: VideoItem
 
     var body: some View {
+        Group {
+            switch model.inspectorTab {
+            case .people: peopleList
+            case .text: TextInspectorView(model: model, video: video)
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            Picker("隠すもの", selection: $model.inspectorTab) {
+                Text("人の顔").tag(InspectorTab.people)
+                Text("画面の文字").tag(InspectorTab.text)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .help("人の顔：映っている人を選んで隠します／画面の文字：画面録画に映る電話番号や名前などを隠します")
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var peopleList: some View {
         List(selection: $video.focusedPerson) {
             if video.job != .idle || video.summary != nil {
                 ExportSection(model: model, video: video)
@@ -158,8 +179,10 @@ struct InspectorView: View {
             ContentUnavailableView {
                 Label("顔が見つかりませんでした", systemImage: "person.crop.circle.badge.questionmark")
             } description: {
-                Text("小さい顔や、横顔しか映らない人は見つからないことがあります。設定の「顔を探す精度」を「高精度」にして探し直すと、見つかる場合があります。")
+                Text("小さい顔や、横顔しか映らない人は見つからないことがあります。設定の「顔を探す精度」を「高精度」にして探し直すと、見つかる場合があります。画面録画なら、「画面の文字」で電話番号や名前などを隠せます。")
             } actions: {
+                Button("画面の文字を隠す") { model.inspectorTab = .text }
+                    .buttonStyle(.borderedProminent)
                 SettingsLink { Text("設定を開く…") }
             }
         } else if video.analysis == nil, video.analyzing == nil, video.isReady, video.job == .idle {
@@ -255,7 +278,7 @@ private struct PersonRow: View {
 }
 
 /// A short, tinted note inside the list (an explanation or a hint), optionally with one action.
-private struct Notice<Action: View>: View {
+struct Notice<Action: View>: View {
     let title: String
     let message: String
     let systemImage: String
@@ -336,7 +359,7 @@ private struct FaceStack: View {
 
 // MARK: - Export
 
-private struct ExportSection: View {
+struct ExportSection: View {
     @Bindable var model: AppModel
     let video: VideoItem
 
@@ -566,7 +589,7 @@ private struct SliderRow: View {
 }
 
 /// Section titles at a readable size (the default list header is small, gray caption text).
-private struct SectionTitle: View {
+struct SectionTitle: View {
     let text: String
     init(_ text: String) { self.text = text }
     var body: some View {

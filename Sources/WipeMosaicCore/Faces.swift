@@ -10,15 +10,19 @@ final class ResultBox<T>: @unchecked Sendable {
     func values() throws -> [T] { try lock.withLock { slots }.map { try $0!.get() } }
 }
 
-/// Faces found in one frame, in Core Image coordinates (pixels, bottom-left origin).
+/// Boxes for one frame, in Core Image coordinates (pixels, bottom-left origin).
 public struct FrameFaces: Sendable {
     public let time: Double
+    /// Faces to mosaic; the face margin (pad) is added when drawing.
     public let mosaic: [CGRect]
     public let kept: [CGRect]
-    public init(time: Double, mosaic: [CGRect], kept: [CGRect]) {
+    /// Other boxes to mosaic exactly as given (on-screen text, margin already included).
+    public let exact: [CGRect]
+    public init(time: Double, mosaic: [CGRect], kept: [CGRect], exact: [CGRect] = []) {
         self.time = time
         self.mosaic = mosaic
         self.kept = kept
+        self.exact = exact
     }
 }
 
