@@ -12,18 +12,24 @@ public enum CoverStyle: String, Sendable, CaseIterable {
 public struct StickerBox: Sendable {
     public let rect: CGRect  // Core Image coordinates, the face box (no margin)
     public let person: Int
-    public init(rect: CGRect, person: Int) {
+    /// The face was not detected in this frame: the box is followed by tracking, bridged
+    /// between two appearances or held at the last known position. The face may be beside
+    /// the box, so the mosaic (or blur) is drawn under the sticker with the usual margin.
+    public let estimated: Bool
+    public init(rect: CGRect, person: Int, estimated: Bool = false) {
         self.rect = rect
         self.person = person
+        self.estimated = estimated
     }
 }
 
 /// An image (e.g. a cut-out face photo) drawn over a face.
 ///
 /// When the image has a face of its own, that face is laid over the face in the video, so a
-/// face photo replaces the face at its size. Otherwise the opaque part of the image (its
-/// transparent margin ignored) is laid over the face box. Either way the image is scaled
-/// uniformly so its anchor covers the face box times `scale` completely.
+/// face photo replaces the face at its size (a larger photo is cut down to the area around
+/// its face first). Otherwise the opaque part of the image (its transparent margin ignored)
+/// is laid over the face box. Either way the image is scaled uniformly so its anchor covers
+/// the face box times `scale` completely.
 public final class Sticker: @unchecked Sendable {
     public let cgImage: CGImage
     public let image: CIImage
@@ -34,12 +40,46 @@ public final class Sticker: @unchecked Sendable {
     /// Alpha (0…255) at reduced size, row 0 at the bottom, for the coverage check.
     private let alpha: [UInt8]
     private let alphaSize: (w: Int, h: Int)
+    /// `image` at 1/2, 1/4… so drawing a small sticker resamples from a near size.
+    private let levels: [(scale: CGFloat, image: CIImage)]
 
-    public init(cgImage: CGImage) throws {
-        let w = cgImage.width, h = cgImage.height
-        guard w >= 8, h >= 8 else { throw ToolError("画像が小さすぎます（8×8ピクセル以上にしてください）") }
-        self.cgImage = cgImage
-        image = CIImage(cgImage: cgImage)
+    /// Alpha counted as hiding what is under it (a half-transparent image shows the face).
+    static let opaqueAlpha: UInt8 = 242
+    /// Share of the face ellipse that must be covered, besides the whole core.
+    public static let minCoverage = 0.98
+
+    public convenience init(cgImage: CGImage) throws {
+        try self.init(cgImage: cgImage, cropToFace: true)
+    }
+
+    private init(cgImage source: CGImage, cropToFace: Bool) throws {
+        guard source.width >= 8, source.height >= 8 else { throw ToolError("画像が小さすぎます（8×8ピクセル以上にしてください）") }
+
+        // A face in the image (detected over grey, so a transparent background is not black).
+        let srcImage = CIImage(cgImage: source)
+        let ext0 = srcImage.extent
+        let flat = srcImage.composited(over: CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5)).cropped(to: ext0))
+        let faces = (try? detectFaces(image: flat, tiles: 1, extraRegions: [])) ?? []
+        let largest = faces.max { a, b in a.width * a.height < b.width * b.height }
+        var face = largest.flatMap { $0.width * $0.height >= ext0.width * ext0.height * 0.02 ? $0 : nil }
+
+        // A photo larger than the head (upper body, a group…) would be drawn several times
+        // the face in the video: keep 2.5× the face around it.
+        var cg = source
+        if cropToFace, let f = face {
+            let keep = scaled(f, 2.5).integral.intersection(ext0)
+            if keep.width < ext0.width - 1 || keep.height < ext0.height - 1 {
+                // CGImage cropping is top-left based.
+                let top = CGRect(x: keep.minX, y: ext0.height - keep.maxY, width: keep.width, height: keep.height)
+                if let c = source.cropping(to: top) {
+                    cg = c
+                    face = f.offsetBy(dx: -keep.minX, dy: -keep.minY)
+                }
+            }
+        }
+        cgImage = cg
+        image = CIImage(cgImage: cg)
+        let w = cg.width, h = cg.height
 
         // Alpha mask at most 256 px on the long side (row 0 = top in the bitmap).
         let s = min(1, 256 / Double(max(w, h)))
@@ -51,12 +91,11 @@ public final class Sticker: @unchecked Sendable {
                 space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue)
             else { return false }
             ctx.interpolationQuality = .medium
-            ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: aw, height: ah))
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: aw, height: ah))
             return true
         }
         guard drawn else { throw ToolError("画像を読み込めません") }
-        // Flip so row 0 is the bottom, like Core Image.
-        var flipped = [UInt8](repeating: 0, count: aw * ah)
+        var flipped = [UInt8](repeating: 0, count: aw * ah)  // row 0 = bottom, like Core Image
         for y in 0..<ah { for x in 0..<aw { flipped[y * aw + x] = buf[(ah - 1 - y) * aw + x] } }
         alpha = flipped
         alphaSize = (aw, ah)
@@ -70,22 +109,30 @@ public final class Sticker: @unchecked Sendable {
         let opaque = CGRect(
             x: Double(minX) * fx, y: Double(minY) * fy,
             width: Double(maxX - minX + 1) * fx, height: Double(maxY - minY + 1) * fy)
-
-        // A face in the image (detected on the image over grey, so a transparent background
-        // does not read as black).
-        let ext = image.extent
-        let grey = CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5)).cropped(to: ext)
-        let flat = image.composited(over: grey)
-        let faces = (try? detectFaces(image: flat, tiles: 1, extraRegions: [])) ?? []
-        let largest = faces.max { a, b in a.width * a.height < b.width * b.height }
-        let minArea = ext.width * ext.height * 0.02
-        if let face = largest, face.width * face.height >= minArea {
+        if let face {
             anchor = face
             anchoredOnFace = true
         } else {
             anchor = opaque
             anchoredOnFace = false
         }
+
+        var lv: [(CGFloat, CIImage)] = [(1, image)]
+        var side = max(w, h), k: CGFloat = 1
+        while side / 2 >= 32 {
+            side /= 2
+            k /= 2
+            let lw = max(1, Int((CGFloat(w) * k).rounded())), lh = max(1, Int((CGFloat(h) * k).rounded()))
+            guard let ctx = CGContext(
+                data: nil, width: lw, height: lh, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { break }
+            ctx.interpolationQuality = .high
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: lw, height: lh))
+            guard let small = ctx.makeImage() else { break }
+            lv.append((k, CIImage(cgImage: small)))
+        }
+        levels = lv
     }
 
     public convenience init(contentsOf url: URL) throws {
@@ -107,38 +154,51 @@ public final class Sticker: @unchecked Sendable {
         return (f, origin)
     }
 
-    /// Share of the face (the ellipse inside a square face box) covered by opaque pixels
-    /// (alpha ≥ 50%) when drawn at `scale`. Below 1, part of the real face shows through.
-    public func coverage(scale: Double) -> Double {
+    /// Fraction of sample points inside an ellipse of `radius` (1 = the ellipse inside a
+    /// square face box) covered by (nearly) opaque pixels when drawn at `scale`.
+    private func covered(scale: Double, radius: Double) -> Double {
         let face = CGRect(x: 0, y: 0, width: 100, height: 100)
         let (f, origin) = placement(over: face, scale: scale)
         let ext = image.extent
-        let n = 40
-        var inside = 0, covered = 0
+        let n = 128  // finer than the alpha map of a sticker scaled to the face, so a thin slit is sampled
+        var inside = 0, hit = 0
         for j in 0..<n {
             for i in 0..<n {
                 let px = (Double(i) + 0.5) / Double(n), py = (Double(j) + 0.5) / Double(n)
                 let dx = px - 0.5, dy = py - 0.5
-                guard dx * dx + dy * dy <= 0.25 else { continue }
+                guard dx * dx + dy * dy <= 0.25 * radius * radius else { continue }
                 inside += 1
-                // Point in the face → point in the image → alpha sample.
                 let ix = (face.minX + px * face.width - origin.x) / f
                 let iy = (face.minY + py * face.height - origin.y) / f
                 guard ix >= 0, iy >= 0, ix < ext.width, iy < ext.height else { continue }
                 let ax = min(alphaSize.w - 1, Int(ix / ext.width * Double(alphaSize.w)))
                 let ay = min(alphaSize.h - 1, Int(iy / ext.height * Double(alphaSize.h)))
-                if alpha[ay * alphaSize.w + ax] >= 128 { covered += 1 }
+                if alpha[ay * alphaSize.w + ax] >= Self.opaqueAlpha { hit += 1 }
             }
         }
-        return inside == 0 ? 0 : Double(covered) / Double(inside)
+        return inside == 0 ? 0 : Double(hit) / Double(inside)
     }
+
+    /// Share of the face (the ellipse inside a square face box) covered by nearly opaque
+    /// pixels. Hair, ears and the jaw outline are outside this ellipse and may show.
+    public func coverage(scale: Double) -> Double { covered(scale: scale, radius: 1) }
+
+    /// The middle of the face (eyes, nose, mouth) is covered completely: a thin transparent
+    /// slit across the eyes is a small share of the area but shows who it is.
+    public func coversCore(scale: Double) -> Bool { covered(scale: scale, radius: 0.6) >= 1 }
+
+    /// Part of the face shows through or around the image at `scale`.
+    public func showsFace(scale: Double) -> Bool { coverage(scale: scale) < Self.minCoverage || !coversCore(scale: scale) }
 
     /// The image placed over `face`, ready to composite over the frame.
     func drawn(over face: CGRect, scale: Double) -> CIImage {
         let (f, origin) = placement(over: face, scale: scale)
-        let resized = f < 1
-            ? image.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: f, kCIInputAspectRatioKey: 1])
-            : image.transformed(by: CGAffineTransform(scaleX: f, y: f))
+        // Resample from the smallest prepared size that is still at least as large.
+        let level = levels.last { $0.scale >= f } ?? levels[0]
+        let k = f / level.scale
+        let resized = k < 1
+            ? level.image.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: k, kCIInputAspectRatioKey: 1])
+            : level.image.transformed(by: CGAffineTransform(scaleX: k, y: k))
         let e = resized.extent
         return resized.transformed(by: CGAffineTransform(translationX: origin.x - e.minX, y: origin.y - e.minY))
     }
@@ -148,7 +208,11 @@ public final class Sticker: @unchecked Sendable {
 public func applyCover(
     _ img: CIImage, rects: [CGRect], stickers: [StickerBox], render: RenderSettings, block: CGFloat
 ) -> CIImage {
-    var out = render.style == .blur ? applyBlur(img, rects: rects, block: block) : applyMosaic(img, rects: rects, block: block)
+    // Under a sticker whose face was not detected in this frame, and for a face whose
+    // sticker is missing, the mosaic (or blur) with the usual margin: never a bare face.
+    let under = stickers.filter { $0.estimated || render.stickers[$0.person] == nil }.map { padded($0.rect, render.pad) }
+    let all = rects + under
+    var out = render.style == .blur ? applyBlur(img, rects: all, block: block) : applyMosaic(img, rects: all, block: block)
     for s in stickers {
         guard let sticker = render.stickers[s.person] else { continue }
         out = sticker.drawn(over: s.rect, scale: render.stickerScale).composited(over: out).cropped(to: img.extent)
@@ -159,22 +223,28 @@ public func applyCover(
 /// Blur that keeps no more detail than the mosaic of the same block size: the region is
 /// pixellated first (detail removed for good) and the blocks are then blurred smooth, so a
 /// sharpening filter cannot bring back what a plain blur would only have spread out.
+/// Inside each box the blur is complete; it fades out over a short distance outside, so the
+/// edge does not look like a pasted grey square.
 public func applyBlur(_ img: CIImage, rects: [CGRect], block: CGFloat) -> CIImage {
-    guard !rects.isEmpty else { return img }
     let ext = img.extent
+    let boxes = rects.map { $0.intersection(ext) }.filter { !$0.isNull && !$0.isEmpty }
+    guard !boxes.isEmpty else { return img }
     let blurred = img.clampedToExtent()
         .applyingFilter(
             "CIPixellate",
             parameters: [kCIInputScaleKey: block, kCIInputCenterKey: CIVector(x: ext.minX, y: ext.minY)]
         )
-        .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: block * 2])
+        .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: block])
         .cropped(to: ext)
-    var out = img
-    for r in rects {
-        let c = r.intersection(ext)
-        if !c.isNull && !c.isEmpty { out = blurred.cropped(to: c).composited(over: out) }
-    }
-    return out
+    var hard = CIImage.empty()
+    for b in boxes { hard = CIImage(color: .white).cropped(to: b).composited(over: hard) }
+    let fade = max(2, block / 3)
+    let soft = hard.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: fade])
+    // Fully blurred inside the boxes (max with the hard mask), fading out only outside them.
+    let mask = soft.applyingFilter("CIMaximumCompositing", parameters: [kCIInputBackgroundImageKey: hard]).cropped(to: ext)
+    return blurred.applyingFilter(
+        "CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: img, kCIInputMaskImageKey: mask]
+    ).cropped(to: ext)
 }
 
 /// Steady boxes for a sticker: a detected face box jitters a little every frame, which a

@@ -84,7 +84,7 @@ struct InspectorView: View {
         if let analysis = video.analysis, !analysis.people.isEmpty {
             Section {
                 // Always visible: what checking means and where else it can be done.
-                Text("顔を押すと、その人にモザイクをかけます。もう一度押すと外れます。動画の中の顔を押しても同じです。")
+                Text("顔を押すと、その人を隠します。もう一度押すと外れます。動画の中の顔を押しても同じです。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -136,7 +136,7 @@ struct InspectorView: View {
                     .selectionDisabled()
                 }
             } header: {
-                SectionTitle("モザイクをかける人")
+                SectionTitle("隠す人")
             }
         }
     }
@@ -275,14 +275,18 @@ private struct PersonRow: View {
         let similar = person.similar
         let registered = !checked && video.registeredHints[person.id] != nil
         let other = checked ? nil : video.crossHints[person.id]
-        // Share of the face the sticker covers (the image is not drawn over a mosaic).
-        let coverage = checked ? stickerItem.map { $0.sticker.coverage(scale: model.stickerScale) } : nil
-        let seeThrough = coverage.map { $0 < 0.98 } ?? false
+        // Whether part of the face shows through or around the sticker (no mosaic under it).
+        let sticker = checked ? stickerItem?.sticker : nil
+        let seeThrough = sticker?.showsFace(scale: model.stickerScale) ?? false
         if !similar.isEmpty || registered || other != nil || seeThrough {
             VStack(alignment: .leading, spacing: 3) {
-                if let coverage, seeThrough {
+                if let sticker, seeThrough {
+                    // Raising the size only helps when the face is beside the image, not
+                    // when it shows through a hole or a half-transparent part.
                     Badge(
-                        text: "この画像では顔の一部が見えます（隠れるのは顔の\(Int((coverage * 100).rounded(.down)))%）。「スタンプの大きさ」を上げるか、透明な部分のない画像にしてください",
+                        text: sticker.showsFace(scale: 2.0)
+                            ? "この画像は透明や半透明の部分から顔が透けて見えます。別の画像にしてください"
+                            : "この大きさでは顔の一部が見えます。「隠し方の調整」の「スタンプの大きさ」を上げてください",
                         systemImage: "eye.trianglebadge.exclamationmark")
                 }
                 if !similar.isEmpty {
@@ -440,7 +444,7 @@ struct ExportSection: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .help("\(s.output.path)\n\(s.format.description)・\(s.mosaicFrames)/\(s.frames)フレームにモザイク・\(formatSeconds(s.elapsed))")
+                        .help("\(s.output.path)\n\(s.format.description)・\(s.mosaicFrames)/\(s.frames)フレームで隠す・\(formatSeconds(s.elapsed))")
                 }
             } icon: {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
@@ -468,7 +472,7 @@ struct ExportSection: View {
         .selectionDisabled()
 
         if s.dips.isEmpty {
-            Label("途中でモザイクが減る場面は見つかりませんでした", systemImage: "checkmark.seal")
+            Label("途中で隠す顔の数が減る場面は見つかりませんでした", systemImage: "checkmark.seal")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .selectionDisabled()
@@ -481,7 +485,7 @@ struct ExportSection: View {
                         HStack {
                             Text("\(formatTime(d.start)) – \(formatTime(d.end))").monospacedDigit()
                             Spacer()
-                            Text("モザイク \(d.around) → \(d.count)").foregroundStyle(.secondary).monospacedDigit()
+                            Text("隠す顔 \(d.around) → \(d.count)").foregroundStyle(.secondary).monospacedDigit()
                         }
                         .contentShape(Rectangle())
                     }
@@ -492,7 +496,7 @@ struct ExportSection: View {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("確かめてほしい場面（\(s.dips.count)か所）")
-                        Text("前後より、モザイクの数が減っています。顔が見えていないか確かめてください。")
+                        Text("前後より、隠している顔の数が減っています。顔が見えていないか確かめてください。")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -524,11 +528,11 @@ private struct MosaicSection: View {
                     if model.current.map({ !model.activeStickers($0).isEmpty }) == true {
                         SliderRow(title: "スタンプの大きさ", value: $model.stickerScale, range: 0.8...2.0, step: 0.05,
                                   low: "小さい", high: "大きい", text: "\(Int((model.stickerScale * 100).rounded()))%",
-                                  note: "顔の写真は、写真の顔を動画の顔に合わせて重ねます。スタンプの下にはモザイクをかけないので、画像の透明な部分からは顔が見えます。")
+                                  note: "顔の写真は、写真の顔を動画の顔に合わせて重ねます。背景を透明にした切り抜き画像がおすすめです。スタンプの周りから、髪型や頭の輪郭は見えます。顔が見つからない場面では、スタンプの下にもモザイク（ぼかし）をかけます。")
                     }
                     SliderRow(title: "顔の前後も続ける時間", value: $model.hold, range: 0...3, step: 0.25,
                               low: "0秒", high: "3秒", text: String(format: "%.2g秒", model.hold),
-                              note: "顔が映る前と見えなくなった後も、この時間だけモザイクを続けます。横を向いた瞬間に外れるのを防ぎます。")
+                              note: "顔が映る前と見えなくなった後も、この時間だけ隠し続けます。横を向いた瞬間に外れるのを防ぎます。")
                     SliderRow(title: "\(model.coverStyle == .blur ? "ぼかし" : "モザイク")の広さ", value: $model.pad, range: 0.2...1.0, step: 0.05,
                               low: "狭い", high: "広い", text: "\(Int((model.pad * 100).rounded()))%",
                               note: "広げると、髪や耳まで隠れます。")
@@ -567,12 +571,12 @@ struct CoverStyleRows: View {
         let blur = model.coverStyle == .blur
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                Picker("隠し方", selection: $model.coverStyle) {
+                Picker("基本の隠し方", selection: $model.coverStyle) {
                     Text("モザイク").tag(CoverStyle.mosaic)
                     Text("ぼかし").tag(CoverStyle.blur)
                 }
                 .pickerStyle(.segmented)
-                Text("顔と画面の文字に使います。スタンプを選んだ人には、スタンプを重ねます。")
+                Text("顔と画面の文字に使います（すべての動画に共通）。人ごとにスタンプを選んだ顔は、スタンプで隠します。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -595,7 +599,7 @@ struct CoverStyleRows: View {
                 .disabled(model.autoBlock)
                 Text(model.autoBlock
                      ? "おまかせでは、動画の大きさに合わせて決めます。"
-                     : blur ? "強くするほど、顔の形や文字が分からなくなります。" : "粗くするほど、顔の形が分からなくなります。")
+                     : blur ? "強くするほど、顔の形や文字が分からなくなります。" : "粗くするほど、顔の形や文字が分からなくなります。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -621,7 +625,7 @@ private struct CoverMenu: View {
         let styleName = model.coverStyle == .blur ? "ぼかし" : "モザイク"
         Menu {
             Picker("隠し方", selection: Binding(get: { current?.id }, set: { model.setSticker($0, for: person) })) {
-                Text(styleName).tag(UUID?.none)
+                Text("基本の隠し方（\(styleName)）").tag(UUID?.none)
                 ForEach(Array(model.stickerLibrary.enumerated()), id: \.element.id) { i, item in
                     Label {
                         Text("スタンプ \(i + 1)")

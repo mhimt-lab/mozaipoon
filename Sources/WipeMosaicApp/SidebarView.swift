@@ -130,7 +130,7 @@ private struct VideoRow: View {
                 } else if a.people.isEmpty {
                     StatusLabel("顔が見つかりません", systemImage: "person.crop.circle.badge.questionmark")
                 } else {
-                    StatusLabel("\(a.people.count)人中 0人にモザイク", systemImage: "circle.dashed")
+                    StatusLabel("\(a.people.count)人中 0人を隠す", systemImage: "circle.dashed")
                 }
             }
         }

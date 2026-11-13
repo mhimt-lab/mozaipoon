@@ -144,7 +144,7 @@ private struct StickerSettings: View {
         Form {
             Section {
                 if model.stickerLibrary.isEmpty {
-                    Text("まだありません。右の一覧でモザイクをかける人の「隠し方」から画像を選ぶと、ここに並びます。")
+                    Text("まだありません。右の一覧で隠す人の「隠し方」から画像を選ぶと、ここに並びます。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
@@ -156,6 +156,9 @@ private struct StickerSettings: View {
                                     .aspectRatio(contentMode: .fit)
                                     .frame(width: 64, height: 64)
                                 Text("スタンプ \(i + 1)").font(.callout)
+                                Button("削除", role: .destructive) { model.removeSticker(item) }
+                                    .buttonStyle(.link)
+                                    .font(.callout)
                             }
                             .contextMenu {
                                 Button("削除", systemImage: "trash", role: .destructive) { model.removeSticker(item) }
@@ -170,7 +173,7 @@ private struct StickerSettings: View {
             } header: {
                 Text("顔に重ねる画像")
             } footer: {
-                Text("削除するには、画像を右クリックします。使っていた人は、モザイク（ぼかし）に戻ります。画像はこのMacの中だけに保存され、どこにも送信されません。")
+                Text("使っていた人は、基本の隠し方（モザイクかぼかし）に戻ります。削除は取り消せません。画像はこのMacの中だけに保存され、どこにも送信されません。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

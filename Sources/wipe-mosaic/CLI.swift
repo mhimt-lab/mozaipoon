@@ -25,10 +25,16 @@ func runMosaic(_ o: RunOptions) async throws {
         guard fm.fileExists(atPath: url.path) else { throw ToolError("sticker image not found: \(url.path)") }
         let s = try Sticker(contentsOf: url)
         stickers[person] = s
-        let cover = s.coverage(scale: o.common.render.stickerScale)
-        print(String(format: "sticker for person %d: %@, covers %.0f%% of the face", person,
-                     s.anchoredOnFace ? "laid face on face" : "no face in the image, opaque part laid on the face", cover * 100))
-        if cover < 0.98 { print("  warning: part of the face may show around this image; raise --sticker-scale") }
+        let scale = o.common.render.stickerScale
+        print(String(format: "sticker for person %d: %@, covers %.0f%% of the face%@", person,
+                     s.anchoredOnFace ? "laid face on face" : "no face in the image, opaque part laid on the face",
+                     s.coverage(scale: scale) * 100, s.coversCore(scale: scale) ? "" : " (not all of the eyes, nose and mouth)"))
+        if s.showsFace(scale: scale) {
+            print(s.showsFace(scale: 4)
+                  ? "  warning: the face shows through this image (transparent or half-transparent parts); use another image"
+                  : "  warning: part of the face shows around this image; raise --sticker-scale")
+        }
+        print("  hair, ears and the outline of the head can still show around a sticker")
     }
 
     let asset = AVURLAsset(url: o.common.input)

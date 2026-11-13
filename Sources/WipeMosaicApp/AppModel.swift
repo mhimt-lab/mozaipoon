@@ -87,7 +87,8 @@ final class AppModel {
     }
 
     // MARK: Stickers (images put over a person's face)
-    var stickerLibrary: [StickerItem] = StickerStore.loadAll()
+    /// Loaded in the background at launch (each image is decoded and searched for a face).
+    var stickerLibrary: [StickerItem] = []
     /// The person waiting for an image from the file dialog.
     var stickerTarget: Int?
     var importingSticker = false
@@ -188,6 +189,16 @@ final class AppModel {
 
     init() {
         Remux.removeAll()
+        Task.detached(priority: .userInitiated) { [weak self] in
+            weak let model = self
+            let items = StickerStore.loadAll()
+            await MainActor.run {
+                guard let model else { return }
+                // Images added while loading stay, after the saved ones.
+                model.stickerLibrary = items + model.stickerLibrary.filter { s in !items.contains { $0.id == s.id } }
+                model.refreshLive()
+            }
+        }
         player.actionAtItemEnd = .pause
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 30), queue: .main
@@ -228,6 +239,13 @@ final class AppModel {
     }
 
     func sticker(_ id: UUID?) -> StickerItem? { id.flatMap { id in stickerLibrary.first { $0.id == id } } }
+
+    /// Chosen people whose sticker lets part of the face show at the current size.
+    func seeThroughStickers(_ v: VideoItem) -> [Int] {
+        activeStickers(v).compactMap { person, id in
+            sticker(id).map { $0.sticker.showsFace(scale: stickerScale) } == true ? person : nil
+        }.sorted()
+    }
 
     var mosaicParams: MosaicParams {
         MosaicParams(hold: hold, pad: pad, block: autoBlock ? nil : block, style: coverStyle, stickerScale: stickerScale)
@@ -385,6 +403,8 @@ final class AppModel {
                 v.stickers = v.stickers.filter { $0.value != item.id }
                 if v.id == currentID { refreshLive() }
             }
+            // Undo would bring back a sticker that no longer exists.
+            undoManager?.removeAllActions()
         } catch {
             alert = AppAlert(title: "スタンプを削除できませんでした", message: AppModel.describe(error))
         }

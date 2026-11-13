@@ -180,11 +180,30 @@ func selfCheckCover() -> [String] {
         $0.fillPath(using: .evenOdd)
     }
     if let disc, let s = try? Sticker(cgImage: disc) {
-        expect(s.coverage(scale: 1.0) > 0.99, "disc covers the face: \(s.coverage(scale: 1.0))")
+        expect(s.coverage(scale: 1.2) > 0.99, "disc covers the face: \(s.coverage(scale: 1.2))")
     } else { failures.append("disc sticker could not be made") }
     if let ring, let s = try? Sticker(cgImage: ring) {
         expect(s.coverage(scale: 1.2) < 0.9, "ring leaves the face visible: \(s.coverage(scale: 1.2))")
     } else { failures.append("ring sticker could not be made") }
+    // Half-transparent: the face shows through even though every pixel is "there".
+    let glass = image {
+        $0.setFillColor(CGColor(red: 1, green: 0.8, blue: 0.2, alpha: 0.55))
+        $0.fillEllipse(in: CGRect(x: 10, y: 10, width: 180, height: 180))
+    }
+    if let glass, let s = try? Sticker(cgImage: glass) {
+        expect(s.showsFace(scale: 1.2), "half-transparent disc shows the face: \(s.coverage(scale: 1.2))")
+    } else { failures.append("glass sticker could not be made") }
+    // A thin slit across the eyes: under 2% of the area, but the core is not covered.
+    let slit = image {
+        $0.fillEllipse(in: CGRect(x: 10, y: 10, width: 180, height: 180))
+        $0.clear(CGRect(x: 40, y: 112, width: 120, height: 3))
+    }
+    if let slit, let s = try? Sticker(cgImage: slit) {
+        expect(s.showsFace(scale: 1.0), "slit across the eyes shows the face: \(s.coverage(scale: 1.0))")
+    } else { failures.append("slit sticker could not be made") }
+    if let disc, let s = try? Sticker(cgImage: disc) {
+        expect(!s.showsFace(scale: 1.2), "solid disc does not show the face")
+    }
     let clear = image { _ in }
     expect(clear.map { (try? Sticker(cgImage: $0)) == nil } == true, "fully transparent image is refused")
     return failures

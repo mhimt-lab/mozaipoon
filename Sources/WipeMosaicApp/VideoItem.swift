@@ -175,12 +175,12 @@ final class VideoItem: Identifiable {
         return out.isEmpty ? nil : "\(out.joined(separator: "と"))は探していないので、モザイクがかかりません"
     }
 
-    /// "3人中 1人・文字 12行にモザイク" for the sidebar and the export sheet.
+    /// "3人中 1人・文字 12行を隠す" for the sidebar and the export sheet (mosaic, blur or sticker).
     var choiceSummary: String {
         var parts: [String] = []
         if let a = analysis, !a.people.isEmpty, !selected.isEmpty { parts.append("\(a.people.count)人中 \(selected.count)人") }
         if hiddenTextCount > 0 { parts.append("文字 \(hiddenTextCount)行") }
-        return parts.joined(separator: "・") + "にモザイク"
+        return parts.joined(separator: "・") + "を隠す"
     }
 
     var subtitle: String {

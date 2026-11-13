@@ -173,6 +173,9 @@ private struct ExportRow: View {
                     if video.canExport, let skipped = video.skippedSearch {
                         warning(skipped)
                     }
+                    if video.canExport, case let people = model.seeThroughStickers(video), !people.isEmpty {
+                        warning("\(people.map { "人物 \($0)" }.joined(separator: "、"))のスタンプは、顔の一部が透けて見えます")
+                    }
                     if video.canExport, let a = video.analysis, !a.people.isEmpty, video.selected.isEmpty {
                         warning("顔が\(a.people.count)人見つかりましたが、誰も選んでいません（顔は隠れません）")
                     }
