@@ -559,7 +559,8 @@ func wrappedKind(_ upper: String, _ lower: String) -> TextKind? {
 /// `extend` seconds, as when hidden): one where both were read if there is one, else one
 /// where either was read (the other's place interpolated, or held where it was read: while
 /// scrolling, two lines read once each at different frames are not matched). Overlapping `a`
-/// sideways, give or take 1.5 lines (a wrapped value in a column, a centered address). Two
+/// sideways, with 1.5 lines to spare on either side (a wrapped value in a column, a centered
+/// or right-aligned address). Two
 /// lines that were never read together still match within `extend` (glare or a finger may
 /// cover them in turn); a line of the next screen at the same place is hidden too then.
 private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend: Double, bounds: CGRect) -> Bool {
@@ -572,7 +573,7 @@ private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend:
         else { continue }
         let h = ra.height
         let gap = ra.minY - rb.maxY  // Core Image coordinates: y grows upward
-        let column = rb.maxX > ra.minX - 1.5 * h && rb.minX < max(ra.maxX, ra.minX + 1.5 * h)
+        let column = rb.maxX > ra.minX - 1.5 * h && rb.minX < ra.maxX + 1.5 * h
         if gap > -0.3 * h, gap < 0.8 * h, column, rb.height > 0.7 * h, rb.height < 1.4 * h {
             return true
         }
@@ -610,7 +611,7 @@ private let patterns: [(TextKind, NSRegularExpression)] = {
     let digit = "[0-9０-９]"
     let sep = "[\\-‐－ーｰ−\\s()（）.．]"
     let defs: [(TextKind, String)] = [
-        (.email, "[A-Za-z0-9._%+\\-]+\\s?[@＠]\\s?[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}"),
+        (.email, "[A-Za-z0-9._%+\\-]+\\s{0,2}[@＠]\\s{0,2}[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}"),
         (.url, "(?i)(?:https?://|www\\.)[^\\s　]+"),
         (.url, "(?i)[A-Za-z0-9\\-]+(?:\\.[A-Za-z0-9\\-]+)*\\.(?:com|net|org|jp|io|me|info|biz|co|app|dev|ee|ly|gl|tokyo|uk|us|tv|ai|gg|cc|to|fm|so|xyz|site|online|shop|link|page)(?![A-Za-z0-9\\-])(?:/[^\\s　]*)?"),
         (.number, "(?:(?<![A-Za-zＡ-Ｚａ-ｚ])[A-Za-zＡ-Ｚａ-ｚ]{1,4}[\\-‐－]?)?\(digit)(?:\(digit)|\(sep)){4,}\(digit)"),
@@ -821,6 +822,14 @@ func selfCheckMask() -> [String] {
     var indentedBelow = [tiny, track(1, 10...11, y: 555, "テストハイツ402", x: 140)]
     addContinuations(&indentedBelow, times: times, extend: 0.35, bounds: bounds, size: size)
     expect(indentedBelow[1].parts[.address] != nil, "address: line below starting right of a short one")
+    // A short address with the line below starting a little right of its end.
+    var shortRight = TextTrack(id: 0, samples: [10, 11].map {
+        TextSample(frame: $0, rect: CGRect(x: 100, y: 600, width: 100, height: 40), string: "東京都", text: nil)
+    })
+    shortRight.parts = [.address: [whole]]
+    var rightBelow = [shortRight, track(1, 10...11, y: 555, "テストハイツ402", x: 210)]
+    addContinuations(&rightBelow, times: times, extend: 0.35, bounds: bounds, size: size)
+    expect(rightBelow[1].parts[.address] != nil, "address: line below starting just right of a short one")
     // Wrapped email address, URL and number through addContinuations (no recognized text:
     // the words are hidden with whole-line boxes).
     for (u, l) in [("共有先は example", ".com/private/yamada"), ("電話は 080-0000-", "2222 です"),
