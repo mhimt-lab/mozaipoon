@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 ARCHS=(--arch arm64 --arch x86_64)
 swift build -c release "${ARCHS[@]}" --product WipeMosaic
 BIN=$(swift build -c release "${ARCHS[@]}" --product WipeMosaic --show-bin-path)
-VERSION=1.0
+VERSION=1.1
 
 APP=build/モザイぷーん.app
 rm -rf "$APP"
@@ -36,7 +36,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleVersion</key><string>2</string>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
