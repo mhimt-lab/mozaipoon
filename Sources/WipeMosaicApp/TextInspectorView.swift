@@ -11,13 +11,23 @@ extension TextKind {
         case .name: "人の名前"
         }
     }
+    /// One line under the label; the details are in the help tag.
     var note: String {
         switch self {
-        case .number: "6桁以上の数字（ハイフンや空白を含む。A-123456 のような英字付きも）"
-        case .email: "〜@〜.〜 の形の文字"
-        case .url: "https:// や www. で始まる文字、.com・.jp などで終わる文字"
-        case .address: "〒や「〜県〜市」「〜区〜1-2-3」の形の文字。見つかった所から行の終わりまでと、すぐ下に続く行も隠します"
-        case .name: "よくある名字に、名前や「さん」などが続く文字（「山田 花子」「田中さん」）。見つからない名前は、下の「隠す言葉」に入れてください"
+        case .number: "6桁以上。ハイフン・空白や英字付き（A-123456）も"
+        case .email: "〜@〜.〜 の形"
+        case .url: "https://・www. で始まるもの、.com・.jp などで終わるもの"
+        case .address: "〒や「〜県〜市」「〜区1-2-3」。行の終わりと、すぐ下の行も"
+        case .name: "よくある名字と、続く名前や「さん」など。ほかの名前は「隠す言葉」へ"
+        }
+    }
+    var detail: String {
+        switch self {
+        case .number: "電話番号・カード番号・会員番号など、6桁以上の数字（ハイフンや空白を含む。A-123456 のような英字付きも）を隠します。"
+        case .email: "〜@〜.〜 の形の文字を隠します。2行に折り返したものも、つなげて探します。"
+        case .url: "https:// や www. で始まる文字と、.com・.jp などで終わる文字を隠します。"
+        case .address: "〒や「〜県〜市」「〜区〜1-2-3」の形の文字を、見つかった所から行の終わりまでと、すぐ下に続く行（建物名・部屋番号）も隠します。"
+        case .name: "よくある名字に、名前や「さん」などが続く文字（「山田 花子」「田中さん」）を隠します。珍しい名字・ニックネーム・名前だけの呼びかけは見つからないので、「隠す言葉」に入れてください。"
         }
     }
     var shortLabel: String {
@@ -42,8 +52,19 @@ struct TextInspectorView: View {
                 ExportSection(model: model, video: video)
             }
             if let text = video.text, video.textState == .done {
+                if video.textMaskPending {
+                    Label {
+                        Text("モザイクを作り直しています…")
+                    } icon: {
+                        ProgressView().controlSize(.small)
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .listRowSeparator(.hidden)
+                }
                 kindsSection(text)
-                wordsSection
+                wordsSection(text)
+                thisVideoSection
                 linesSection(text)
             }
         }
@@ -54,14 +75,57 @@ struct TextInspectorView: View {
         .onChange(of: video.purpose) { _, _ in startIfNeeded() }
     }
 
-    /// Opening the tab is the request: read the text right away.
+    /// Read the text right away when it was asked for when the video was added; a video
+    /// added for faces is read only with the button (opening the tab is not a request).
     private func startIfNeeded() {
-        if video.textState == nil, video.isReady, video.purpose != nil { model.scanText(video) }
+        if video.textState == nil, video.isReady, video.purpose?.readsText == true { model.scanText(video) }
     }
 
     // MARK: Kinds
 
     private func kindsSection(_ text: ScreenText) -> some View {
+        Section {
+            Text(video.textAll
+                 ? "この動画は、読み取れた文字をすべて隠しています（下の「この動画だけ」）。"
+                 : "見つかった部分だけにモザイクをかけ、行のほかの文字は残します。外した種類は、ほかの動画でも隠しません。")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .listRowSeparator(.hidden)
+            ForEach(TextKind.allCases) { kind in
+                let count = text.entries.filter { $0.kinds.contains(kind) }.count
+                Toggle(isOn: Binding(
+                    get: { model.textKinds.contains(kind) },
+                    set: { on in if on { model.textKinds.insert(kind) } else { model.textKinds.remove(kind) } }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(kind.label)
+                            Spacer(minLength: 4)
+                            Text("\(count)行")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("この動画で\(count)行")
+                        }
+                        Text(kind.note)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.checkbox)
+                .disabled(video.textAll)
+                .help(kind.detail)
+                .listRowSeparator(.hidden)
+            }
+        } header: {
+            SectionTitle("自動で隠すもの（すべての動画に共通）")
+        }
+    }
+
+    // MARK: This video
+
+    private var thisVideoSection: some View {
         Section {
             Toggle(isOn: Binding(get: { video.textAll }, set: { model.setTextAll($0) })) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -74,49 +138,28 @@ struct TextInspectorView: View {
             }
             .toggleStyle(.checkbox)
             .listRowSeparator(.hidden)
-            Text(video.textAll
-                 ? "読み取れた文字は、すべてモザイクで隠します。"
-                 : "見つかった個人情報に、自動でモザイクをかけます。その部分だけを隠し、行のほかの文字は残します。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .listRowSeparator(.hidden)
-            ForEach(TextKind.allCases) { kind in
-                let count = text.entries.filter { $0.kinds.contains(kind) }.count
-                Toggle(isOn: Binding(
-                    get: { model.textKinds.contains(kind) },
-                    set: { on in if on { model.textKinds.insert(kind) } else { model.textKinds.remove(kind) } }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(kind.label)
-                        Text(count > 0 ? "\(kind.note)・この動画で\(count)行" : kind.note)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .toggleStyle(.checkbox)
-                .disabled(video.textAll)
-                .listRowSeparator(.hidden)
-            }
         } header: {
-            SectionTitle("自動で隠すもの")
+            SectionTitle("この動画だけ")
         }
     }
 
     // MARK: Words
 
-    private var wordsSection: some View {
-        Section {
-            Text("名前やアカウント名など、隠したい言葉を入れます。画面のどこに出ても、その言葉の部分にモザイクをかけます。名字を入れると、すぐ後に続く名前も隠します。すべての動画に使われます。")
+    private func wordsSection(_ text: ScreenText) -> some View {
+        let hits = text.wordLineCounts(model.textWords)
+        return Section {
+            Text("名前やアカウント名など。画面のどこに出ても、その言葉の部分を隠します。名字を入れると、続く名前も隠します。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .listRowSeparator(.hidden)
             ForEach(model.textWords, id: \.self) { w in
-                WordField(model: model, word: w, commit: { new, _ in model.replaceTextWord(w, with: new) },
-                          delete: { model.removeTextWord(w) })
-                    .listRowSeparator(.hidden)
+                VStack(alignment: .leading, spacing: 3) {
+                    WordField(model: model, word: w, commit: { new, _ in model.replaceTextWord(w, with: new) },
+                              delete: { model.removeTextWord(w) })
+                    WordHits(count: hits[w] ?? 0)
+                }
+                .listRowSeparator(.hidden)
             }
             if model.addingTextWord || model.textWords.isEmpty {
                 // Return adds the word and leaves a new empty field, to type the next one.
@@ -143,7 +186,7 @@ struct TextInspectorView: View {
             .help("隠す言葉の欄を増やします")
             .listRowSeparator(.hidden)
         } header: {
-            SectionTitle("隠す言葉")
+            SectionTitle("隠す言葉（すべての動画に共通）")
         }
     }
 
@@ -155,16 +198,37 @@ struct TextInspectorView: View {
         let isMain: (TextEntry) -> Bool = {
             $0.frameCount >= minFrames || !$0.kinds.isEmpty || hidden.contains($0.id) || video.textLines.contains($0.id)
         }
-        let main = text.entries.filter(isMain)
-        let flashes = text.entries.filter { !isMain($0) }
+        let isHidden: (TextEntry) -> Bool = { video.textAll || video.textLines.contains($0.id) || hidden.contains($0.id) }
+        let shown: (TextEntry) -> Bool = { !model.textUnhiddenOnly || !isHidden($0) }
+        let main = text.entries.filter { isMain($0) && shown($0) }
+        let flashes = text.entries.filter { !isMain($0) && shown($0) }
         return Section {
-            Text("チェックを入れた行は、行全体にモザイクをかけます。文字を押すと、その行が映る場面を表示します。")
+            Label {
+                Text("読み取れなかった文字（小さい文字、画像や動画の中の文字、一瞬だけ映った文字）は隠せません。書き出した動画を必ず最後まで確かめてください。")
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            }
+            .font(.callout)
+            .listRowSeparator(.hidden)
+            Text("チェックを入れた行は、行全体を隠します。文字を押すと、その行が映る場面を表示します。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .listRowSeparator(.hidden)
+            if !text.entries.isEmpty {
+                Toggle("隠していない行だけを表示（\(text.entries.filter { !isHidden($0) }.count)行）", isOn: $model.textUnhiddenOnly)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("隠していない行だけを並べて、隠し忘れがないか確かめられます")
+                .listRowSeparator(.hidden)
+            }
             if text.entries.isEmpty {
                 Text("文字が見つかりませんでした。")
+                    .foregroundStyle(.secondary)
+                    .listRowSeparator(.hidden)
+            } else if main.isEmpty, flashes.isEmpty {
+                Text("隠していない行はありません。")
                     .foregroundStyle(.secondary)
                     .listRowSeparator(.hidden)
             }
@@ -180,14 +244,6 @@ struct TextInspectorView: View {
                 .font(.callout)
                 .listRowSeparator(.hidden)
             }
-            Label {
-                Text("読み取れなかった文字（小さい文字、画像や動画の中の文字、一瞬だけ映った文字）は隠せません。書き出した動画を必ず確かめてください。")
-                    .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            }
-            .font(.callout)
-            .listRowSeparator(.hidden)
         } header: {
             SectionTitle("見つかった文字（\(text.entries.count)行）")
         }
@@ -201,15 +257,16 @@ struct TextInspectorView: View {
         case nil:
             if !video.isReady {
                 ContentUnavailableView("読み込んでいます", systemImage: "film")
+            } else if video.purpose == nil {
+                ContentUnavailableView("隠すものを選んでください", systemImage: "questionmark.circle")
             } else {
                 ContentUnavailableView {
-                    Label("画面の文字を読み取っていません", systemImage: "text.viewfinder")
+                    Label("画面の文字は読み取っていません", systemImage: "text.viewfinder")
                 } description: {
-                    Text("何を隠すかを選ぶと、読み取りを始めます。")
+                    Text("この動画の画面に映る電話番号や名前なども隠すときは、読み取ってください。")
                 } actions: {
-                    Button("読み取る") { model.scanText(video) }
+                    Button("この動画の画面の文字を読み取る") { model.scanText(video) }
                         .buttonStyle(.borderedProminent)
-                        .disabled(video.purpose == nil)
                 }
             }
         case .waiting:
@@ -271,18 +328,24 @@ private struct TextLineRow: View {
                 .labelsHidden()
                 .disabled(video.textAll)
                 .help(whole ? "押すと、行全体のモザイクを外します" : "押すと、行全体にモザイクをかけます")
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.text)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(caption(whole: whole, partly: partly))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+            Button {
+                model.seek(to: text.times[entry.firstFrame])
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.text)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(caption(whole: whole, partly: partly))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
-            .onTapGesture { model.seek(to: text.times[entry.firstFrame]) }
+            .buttonStyle(.plain)
             .help("押すと、この行が映る場面を表示します")
+            .accessibilityHint("この行が映る場面を表示します")
             Spacer(minLength: 0)
             if whole || partly {
                 Image(systemName: "eye.slash")
@@ -295,14 +358,37 @@ private struct TextLineRow: View {
 
     private func caption(whole: Bool, partly: Bool) -> String {
         let at = formatTime(text.times[entry.firstFrame])
-        if whole { return "\(at)から・行全体にモザイク" }
+        if whole { return "行全体を隠しています・\(at)〜" }
         if partly {
             var why = entry.kinds.filter { model.textKinds.contains($0) }.sorted { $0.rawValue < $1.rawValue }.map(\.shortLabel)
             if video.textMask?.wordHits.contains(entry.id) == true { why.append("言葉") }
             if why.isEmpty { why.append("読み違えた行の続き") }
-            return "\(at)から・一部にモザイク（\(why.joined(separator: "・"))）"
+            return "一部を隠しています（\(why.joined(separator: "・"))）・\(at)〜"
         }
-        return "\(at)から"
+        return "隠していません・\(at)〜"
+    }
+}
+
+/// How many lines of this video a word was found in; none is a warning (a misreading, or 高
+/// typed for 髙), since the user would otherwise believe the word is hidden.
+private struct WordHits: View {
+    let count: Int
+    var body: some View {
+        if count > 0 {
+            Text("この動画で\(count)行")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
+        } else {
+            Label {
+                Text("この動画では見つかりませんでした。字の違い（高／髙など）や読み違いがないか、下の一覧で確かめてください。")
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            }
+            .font(.callout)
+            .padding(.leading, 4)
+        }
     }
 }
 

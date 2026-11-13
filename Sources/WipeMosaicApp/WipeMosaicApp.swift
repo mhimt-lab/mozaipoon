@@ -113,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "終了すると書き出しを中止し、途中のファイルは削除します。"
         } else {
             alert.messageText = "書き出していない動画があります。終了しますか？"
-            alert.informativeText = "「\(pending[0].name)」\(pending.count > 1 ? "など\(pending.count)本" : "")で選んだ人は、終了すると消えます。元の動画ファイルは削除されません。"
+            alert.informativeText = "「\(pending[0].name)」\(pending.count > 1 ? "など\(pending.count)本" : "")で選んだ内容は、終了すると消えます。元の動画ファイルは削除されません。"
         }
         alert.addButton(withTitle: "キャンセル")
         alert.addButton(withTitle: "終了").hasDestructiveAction = true

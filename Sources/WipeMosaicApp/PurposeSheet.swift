@@ -35,8 +35,8 @@ struct PurposeSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("何を隠しますか？").font(.title2.bold())
                 Text(count > 1
-                     ? "追加した\(count)本の動画に使います。あとから右の一覧で、もう一方を探すこともできます。"
-                     : "あとから右の一覧で、もう一方を探すこともできます。")
+                     ? "追加した\(count)本の動画に使います。あとから右の欄の「人の顔」「画面の文字」で、もう一方も探せます。"
+                     : "あとから右の欄の「人の顔」「画面の文字」で、もう一方も探せます。")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -44,7 +44,7 @@ struct PurposeSheet: View {
                 option(p)
             }
             HStack {
-                Text("Return キーで「\(model.lastPurpose.title)」を選びます")
+                Text("Return キーで前回と同じ「\(model.lastPurpose.title)」を選びます")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -86,7 +86,6 @@ struct PurposeSheet: View {
         }
         .buttonStyle(.plain)
         .modifier(DefaultKey(isOn: isDefault))
-        .accessibilityHint(p.detail)
     }
 }
 

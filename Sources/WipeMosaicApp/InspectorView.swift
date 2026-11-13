@@ -471,7 +471,7 @@ struct ExportSection: View {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("確かめてほしい場面（\(s.dips.count)か所）")
-                        Text("前後より、モザイクの数が減っています。顔が見えていないか確認してください。")
+                        Text("前後より、モザイクの数が減っています。顔が見えていないか確かめてください。")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)

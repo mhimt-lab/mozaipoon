@@ -36,6 +36,7 @@ struct ViewerView: View {
         VStack(spacing: 0) {
             PlayerView(player: model.player)
                 .background(.black)
+                .overlay { textBoxes }
                 .overlay { faceBoxes }
                 .overlay { analysisCard }
                 .overlay(alignment: .top) { hint }
@@ -73,6 +74,25 @@ struct ViewerView: View {
         .animation(.snappy(duration: 0.2), value: video.selected)
     }
 
+    // MARK: Text boxes
+
+    /// Dashed outlines where text is hidden (not written to the file).
+    private var textBoxes: some View {
+        GeometryReader { geo in
+            let s = min(geo.size.width / videoSize.width, geo.size.height / videoSize.height)
+            let ox = (geo.size.width - videoSize.width * s) / 2
+            let oy = (geo.size.height - videoSize.height * s) / 2
+            ForEach(Array(model.visibleTextBoxes.enumerated()), id: \.offset) { _, r in
+                RoundedRectangle(cornerRadius: 3)
+                    .strokeBorder(Color.orange, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                    .frame(width: r.width * s, height: r.height * s)
+                    .position(x: ox + r.midX * s, y: oy + (videoSize.height - r.midY) * s)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     // MARK: Analysis progress
 
     @ViewBuilder
@@ -95,7 +115,7 @@ struct ViewerView: View {
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("キャンセル", role: .cancel) { model.cancelAnalysis() }
+                    Button("中止", role: .cancel) { model.cancelAnalysis() }
                         .buttonStyle(.glass)
                 }
             }
@@ -112,17 +132,18 @@ struct ViewerView: View {
 
     @ViewBuilder
     private var boxToggle: some View {
-        if video.analysis != nil, model.viewMode != .result {
+        if video.analysis != nil || video.textMask != nil, model.viewMode != .result {
+            let what = video.analysis != nil ? "顔の枠" : "隠す範囲の枠"
             Button {
                 model.showFaceBoxes.toggle()
             } label: {
-                Label(model.showFaceBoxes ? "顔の枠を隠す" : "顔の枠を表示",
+                Label(model.showFaceBoxes ? "\(what)を隠す" : "\(what)を表示",
                       systemImage: model.showFaceBoxes ? "person.crop.square" : "person.crop.square.badge.xmark")
                     .font(.callout)
             }
             .buttonStyle(.glass)
             .padding(12)
-            .help("一時停止中に出る顔の枠を、表示する／隠す（⌘B）")
+            .help("一時停止中に出る顔の枠と、文字を隠す範囲の枠（橙の点線）を、表示する／隠す（⌘B）。書き出す動画には入りません")
         }
     }
 
@@ -185,7 +206,7 @@ private struct FaceBox: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)  // the box itself carries the label
         }
-        .help(mosaic ? "クリックでモザイクを外す" : "クリックでモザイクをかける")
+        .help(mosaic ? "押すとモザイクを外します" : "押すとモザイクをかけます")
         .accessibilityLabel("人物 \(person)")
         .accessibilityValue(mosaic ? "モザイクあり" : "モザイクなし")
         .accessibilityHint("モザイクを切り替えます")

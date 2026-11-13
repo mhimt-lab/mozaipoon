@@ -138,6 +138,8 @@ final class AppModel {
     /// Text typed in the word fields, by the word being edited ("" for the new one).
     var wordDrafts: [String: String] = [:]
     var showTextFlashes = false
+    /// The text lines list shows only lines with nothing hidden (to look for what was missed).
+    var textUnhiddenOnly = false
 
     // MARK: Queues
     @ObservationIgnored private var analysisTask: Task<Void, Never>?
@@ -214,6 +216,14 @@ final class AppModel {
     var visibleFaces: [(rect: CGRect, person: Int)] {
         guard let analysis = current?.analysis, showFaceBoxes, !isPlaying, viewMode != .result else { return [] }
         return analysis.faces(atFrame: analysis.frameIndex(at: currentTime))
+    }
+
+    /// Where on-screen text is hidden at the paused frame, outlined so a mosaic on a plain
+    /// background (which looks like nothing) can be told from text that is not there.
+    var visibleTextBoxes: [CGRect] {
+        guard let v = current, let text = v.text, let mask = v.textMask, showFaceBoxes, !isPlaying, viewMode != .result
+        else { return [] }
+        return mask.frames[text.frameIndex(at: currentTime)]
     }
 
     // MARK: - Registered photos

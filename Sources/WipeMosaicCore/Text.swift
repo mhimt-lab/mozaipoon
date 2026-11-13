@@ -264,6 +264,24 @@ public struct ScreenText: Sendable {
         return TextMask(frames: frames, wordHits: wordHits, hidden: hidden)
     }
 
+    /// For each word, the number of lines (entries) where it was found in any reading, so the
+    /// app can show a word that matched nothing (a misreading, 高 for 髙).
+    public func wordLineCounts(_ words: [String]) -> [String: Int] {
+        let owner = entryOfTrack
+        var out: [String: Int] = [:]
+        for w in words {
+            let n = normalizedForMatch(w)
+            guard !n.isEmpty else { continue }
+            var lines = Set<Int>()
+            for t in tracks where distinctReadings(t).contains(where: { !wordRanges(in: $0.string, words: [n]).isEmpty }) {
+                // A track with no line is still a hit (count it on its own), never folded into line 0.
+                lines.insert(owner[t.id] ?? -1 - t.id)
+            }
+            out[w] = lines.count
+        }
+        return out
+    }
+
     /// Boxes (relative to the line) of every word occurrence, from each distinct reading.
     private func wordParts(_ t: TextTrack, _ words: [String]) -> [CGRect] {
         var out: [CGRect] = []

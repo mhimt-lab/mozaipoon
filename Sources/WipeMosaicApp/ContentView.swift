@@ -28,7 +28,7 @@ struct ContentView: View {
                 Button("一覧から取り除く", role: .destructive) { model.remove(id) }
                 Button("キャンセル", role: .cancel) {}
             } message: { id in
-                Text("「\(model.videos.first { $0.id == id }?.name ?? "")」で選んだ人は、まだ書き出していません。元の動画ファイルは削除されません。")
+                Text("「\(model.videos.first { $0.id == id }?.name ?? "")」で選んだ内容は、まだ書き出していません。元の動画ファイルは削除されません。")
             }
             .sheet(isPresented: $model.showingExportSheet) {
                 ExportSheet(model: model)
@@ -117,7 +117,7 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .help("モザイクなし（元の動画）／モザイクあり（いま選んでいる人に、書き出しと同じモザイク）／書き出し結果（書き出したファイル）。⌘1〜⌘3")
+                .help("モザイクなし（元の動画）／モザイクあり（いま選んでいるものに、書き出しと同じモザイク）／書き出し結果（書き出したファイル）。⌘1〜⌘3")
             }
         }
         ToolbarSpacer(.flexible)
@@ -137,18 +137,21 @@ struct ContentView: View {
             Button {
                 model.showInspector.toggle()
             } label: {
-                Label("人の一覧", systemImage: "sidebar.trailing")
+                Label("右の欄", systemImage: "sidebar.trailing")
             }
-            .help(model.showInspector ? "人の一覧を隠す" : "人の一覧を表示")
+            .help(model.showInspector ? "隠すものを選ぶ欄を隠す" : "隠すものを選ぶ欄を表示")
         }
     }
 
     private var exportHelp: String {
         if model.isExporting { return "書き出し中です" }
         let n = model.exportable.count
-        if n == 0 { return "モザイクをかける人を選ぶと書き出せます" }
+        if n == 0 {
+            if let v = model.current, v.stillSearching || v.textMaskPending { return "探し終わると書き出せます" }
+            return "隠すもの（人や文字）を選ぶと書き出せます"
+        }
         if n == 1 { return "モザイクをかけた動画を書き出します（⌘E）" }
-        return "人を選んだ\(n)本の動画から、書き出すものを選びます（⌘E）"
+        return "書き出せる\(n)本の動画から、書き出すものを選びます（⌘E）"
     }
 
     @ViewBuilder
@@ -201,8 +204,8 @@ private struct EmptyStateView: View {
             }
             VStack(alignment: .leading, spacing: 16) {
                 Step(number: 1, title: "動画を追加", detail: "何本でもまとめて追加できます。")
-                Step(number: 2, title: "モザイクをかける人を選ぶ", detail: "映っている顔を自動で探して、人ごとに並べます。")
-                Step(number: 3, title: "書き出す", detail: "選んだ人だけにモザイクをかけます。画質は元の動画のままです。")
+                Step(number: 2, title: "何を隠すか選ぶ", detail: "人の顔、または画面に映る電話番号・名前などの文字。顔は人ごとに並べて、隠す人を選べます。")
+                Step(number: 3, title: "確かめて書き出す", detail: "選んだものだけにモザイクをかけます。画質は元の動画のままです。")
             }
             .frame(maxWidth: 420, alignment: .leading)
             Button("動画を追加…", systemImage: "plus") { model.importingVideo = true }
@@ -232,7 +235,7 @@ private struct PrivacyNote: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("処理はすべてこのMacの中で行います")
                     .font(.headline)
-                Text("動画や顔のデータはどこにも送信しません。")
+                Text("動画や、読み取った顔・文字はどこにも送信しません。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

@@ -16,12 +16,14 @@ struct ExportSheet: View {
                 .padding([.horizontal, .top], 24)
                 .padding(.bottom, 12)
 
-            Toggle(sources: choiceBindings, isOn: \.self) {
-                Text("すべて（\(chosen.count)／\(candidates.filter(\.canExport).count)本）")
+            if candidates.count > 1 {
+                Toggle(sources: choiceBindings, isOn: \.self) {
+                    Text("すべて（\(chosen.count)／\(candidates.filter(\.canExport).count)本）")
+                }
+                .toggleStyle(.checkbox)
+                .padding(.horizontal, 37)
+                .padding(.bottom, 8)
             }
-            .toggleStyle(.checkbox)
-            .padding(.horizontal, 37)
-            .padding(.bottom, 8)
 
             // A plain scroll view (not a List): a focused List swallows Esc, so the
             // sheet could not be cancelled from the keyboard.
@@ -103,10 +105,17 @@ struct ExportSheet: View {
                 .fixedSize()
                 .help(model.exportFolder?.path ?? "それぞれの元の動画と同じフォルダに保存します")
             }
-            Text("名前の後ろに「_mosaic」を付けて保存します。同じ名前があるときは上書きせず、番号を付けます。元の動画は変わりません。画質・形式・音声は元の動画のままです。")
+            Text("元の動画は変わりません。名前の後ろに「_mosaic」を付けて保存します（同じ名前があるときは上書きせず、番号を付けます）。画質・形式・音声は元の動画のままです。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Label {
+                Text("自動で見つからなかった顔や文字は隠れません。公開する前に、書き出した動画を最後まで確かめてください。")
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            }
+            .font(.callout)
         }
     }
 }
@@ -143,12 +152,19 @@ private struct ExportRow: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     if video.canExport, let skipped = video.skippedSearch {
-                        Label {
-                            Text(skipped)
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                        }
-                        .font(.callout)
+                        warning(skipped)
+                    }
+                    if video.canExport, let a = video.analysis, !a.people.isEmpty, video.selected.isEmpty {
+                        warning("顔が\(a.people.count)人見つかりましたが、誰も選んでいません（顔は隠れません）")
+                    }
+                    if video.canExport, video.text != nil, !video.textAll, !model.textKinds.isSuperset(of: TextKind.allCases) {
+                        let off = TextKind.allCases.filter { !model.textKinds.contains($0) }.map { "「\($0.label)」" }
+                        warning("\(off.joined(separator: ""))は、自動で隠さない設定です")
+                    }
+                    if video.canExport, let note = notSearched {
+                        Text(note)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     }
                     if video.canExport, !video.uncheckedHints.isEmpty {
                         HStack(spacing: 8) {
@@ -171,6 +187,25 @@ private struct ExportRow: View {
         }
         .toggleStyle(.checkbox)
         .disabled(!video.canExport)
+    }
+
+    private func warning(_ text: String) -> some View {
+        Label {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
+        .font(.callout)
+    }
+
+    /// The kind of search not asked for when the video was added (not a warning: the user
+    /// chose it, but a video may show both faces and a screen).
+    private var notSearched: String? {
+        switch video.purpose {
+        case .faces? where video.textState == nil: "画面の文字は読み取っていません"
+        case .text? where video.state == .idle: "人の顔は探していません"
+        default: nil
+        }
     }
 
     private var detail: String {

@@ -121,7 +121,10 @@ private struct VideoRow: View {
         case .failed:
             StatusLabel("開けません", systemImage: "exclamationmark.triangle.fill", tint: .red, emphasized: true)
         case .done:
-            if let a = video.analysis {
+            if video.purpose?.readsText == true, video.textState == .waiting || video.textScanning != nil
+                || video.textState == .cancelled || { if case .failed? = video.textState { true } else { false } }() {
+                textStatus  // "both": the text is still being read, or was not
+            } else if let a = video.analysis {
                 if video.hasChoices {
                     choiceStatus
                 } else if a.people.isEmpty {
@@ -155,7 +158,7 @@ private struct VideoRow: View {
             if video.hasChoices {
                 choiceStatus
             } else {
-                StatusLabel("隠す文字はありません", systemImage: "circle.dashed")
+                StatusLabel("自動で見つかった個人情報はありません", systemImage: "circle.dashed")
             }
         }
     }
