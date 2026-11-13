@@ -35,7 +35,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: Binding(
                 get: { !model.pendingPurpose.isEmpty && !model.showingExportSheet },
-                set: { if !$0 && !model.pendingPurpose.isEmpty { model.cancelPurpose() } }
+                // Closed only by its own buttons (dismissal is disabled). Hiding it for another
+                // sheet also sets false here, and must not remove the videos just added.
+                set: { _ in }
             )) {
                 PurposeSheet(model: model)
                     .interactiveDismissDisabled()

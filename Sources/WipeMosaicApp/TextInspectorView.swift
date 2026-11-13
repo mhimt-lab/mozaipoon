@@ -50,11 +50,13 @@ struct TextInspectorView: View {
         .overlay { stateOverlay }
         .onAppear(perform: startIfNeeded)
         .onChange(of: video.id) { _, _ in startIfNeeded() }
+        .onChange(of: video.isReady) { _, _ in startIfNeeded() }
+        .onChange(of: video.purpose) { _, _ in startIfNeeded() }
     }
 
     /// Opening the tab is the request: read the text right away.
     private func startIfNeeded() {
-        if video.textState == nil, video.isReady { model.scanText(video) }
+        if video.textState == nil, video.isReady, video.purpose != nil { model.scanText(video) }
     }
 
     // MARK: Kinds
@@ -111,38 +113,34 @@ struct TextInspectorView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .listRowSeparator(.hidden)
-            HStack {
-                TextField("例：山田", text: $model.textWordDraft)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(addWord)
-                Button("追加", action: addWord)
-                    .disabled(model.textWordDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .listRowSeparator(.hidden)
             ForEach(model.textWords, id: \.self) { w in
-                HStack {
-                    Text(w)
-                    Spacer()
-                    Button {
-                        model.removeTextWord(w)
-                    } label: {
-                        Label("「\(w)」を削除", systemImage: "xmark.circle.fill")
-                            .labelStyle(.iconOnly)
-                            .foregroundStyle(.secondary)
+                WordField(model: model, word: w, commit: { model.replaceTextWord(w, with: $0) }, delete: { model.removeTextWord(w) })
+                    .listRowSeparator(.hidden)
+            }
+            if model.addingTextWord || model.textWords.isEmpty {
+                // Return adds the word and leaves a new empty field, to type the next one.
+                WordField(model: model, word: "", focused: model.addingTextWord, commit: { w in
+                    if w.trimmingCharacters(in: .whitespaces).isEmpty {
+                        model.addingTextWord = false
+                    } else {
+                        model.addTextWord(w)
+                        model.addingTextWord = true  // keep an empty field for the next word
                     }
-                    .buttonStyle(.borderless)
-                    .help("この言葉を隠すのをやめます")
-                }
+                }, delete: { model.addingTextWord = false })
                 .listRowSeparator(.hidden)
             }
+            Button {
+                model.addingTextWord = true
+            } label: {
+                Label("言葉を追加", systemImage: "plus")
+            }
+            .buttonStyle(.borderless)
+            .disabled(model.addingTextWord)
+            .help("隠す言葉の欄を増やします")
+            .listRowSeparator(.hidden)
         } header: {
             SectionTitle("隠す言葉")
         }
-    }
-
-    private func addWord() {
-        model.addTextWord(model.textWordDraft)
-        model.textWordDraft = ""
     }
 
     // MARK: Lines
@@ -199,6 +197,16 @@ struct TextInspectorView: View {
         case nil:
             if !video.isReady {
                 ContentUnavailableView("読み込んでいます", systemImage: "film")
+            } else {
+                ContentUnavailableView {
+                    Label("画面の文字を読み取っていません", systemImage: "text.viewfinder")
+                } description: {
+                    Text("何を隠すかを選ぶと、読み取りを始めます。")
+                } actions: {
+                    Button("読み取る") { model.scanText(video) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(video.purpose == nil)
+                }
             }
         case .waiting:
             ContentUnavailableView {
@@ -287,8 +295,54 @@ private struct TextLineRow: View {
         if partly {
             var why = entry.kinds.filter { model.textKinds.contains($0) }.sorted { $0.rawValue < $1.rawValue }.map(\.shortLabel)
             if video.textMask?.wordHits.contains(entry.id) == true { why.append("言葉") }
+            if why.isEmpty { why.append("読み違えた行の続き") }
             return "\(at)から・一部にモザイク（\(why.joined(separator: "・"))）"
         }
         return "\(at)から"
+    }
+}
+
+/// One word to hide, edited in place: the change applies on Return or when the field is left
+/// (not on every key, which would remake every video's mosaic). The text being typed is kept
+/// in the model (`wordDrafts`): @State needs the SwiftUI macro plugin (see WipeMosaicApp).
+private struct WordField: View {
+    @Bindable var model: AppModel
+    let word: String
+    var focused = false
+    let commit: (String) -> Void
+    let delete: () -> Void
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack {
+            TextField("例：山田", text: Binding(
+                get: { model.wordDrafts[word] ?? word }, set: { model.wordDrafts[word] = $0 }))
+                .textFieldStyle(.roundedBorder)
+                .focused($isFocused)
+                .onSubmit(apply)
+                .onChange(of: isFocused) { _, now in if !now { apply() } }
+                .accessibilityLabel(word.isEmpty ? "新しく隠す言葉" : "隠す言葉「\(word)」")
+            Button {
+                model.wordDrafts[word] = nil
+                delete()
+            } label: {
+                Label(word.isEmpty ? "この欄を閉じる" : "「\(word)」を削除", systemImage: "xmark.circle.fill")
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help(word.isEmpty ? "この欄を閉じます" : "この言葉を隠すのをやめます")
+        }
+        .onAppear { if focused { isFocused = true } }
+        .onChange(of: focused) { _, f in if f { isFocused = true } }
+    }
+
+    private func apply() {
+        let text = model.wordDrafts.removeValue(forKey: word) ?? word
+        guard text != word || word.isEmpty else { return }  // the new field left empty closes
+        commit(text)
+        if word.isEmpty, !text.trimmingCharacters(in: .whitespaces).isEmpty {
+            isFocused = true  // the new-word field stays, empty, for the next word
+        }
     }
 }

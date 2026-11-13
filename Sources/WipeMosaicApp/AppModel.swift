@@ -132,8 +132,11 @@ final class AppModel {
     }
     var showInspector = true
     var inspectorTab: InspectorTab = .people
-    /// The word being typed in the text tab, and whether its rarely seen lines are shown.
-    var textWordDraft = ""
+    /// A new empty word field is shown in the text tab ("＋"), and whether its rarely seen
+    /// lines are shown.
+    var addingTextWord = false
+    /// Text typed in the word fields, by the word being edited ("" for the new one).
+    var wordDrafts: [String: String] = [:]
     var showTextFlashes = false
 
     // MARK: Queues
@@ -309,6 +312,8 @@ final class AppModel {
                     v.asset = AVURLAsset(url: mov)
                     i = try await loadVideo(v.asset)
                 }
+                // Removed meanwhile ("追加しない" in the sheet, or taken off the list).
+                guard videos.contains(where: { $0.id == v.id }) else { return }
                 let item = AVPlayerItem(asset: v.asset)
                 let comp = try await v.live.composition(for: v.asset)
                 item.videoComposition = comp
@@ -585,11 +590,14 @@ final class AppModel {
 
     /// Read the text on screen in `v` (queued if another video is being read).
     func scanText(_ v: VideoItem) {
-        guard v.isReady, v.textScanning == nil, v.textState != .waiting else { return }
+        // Nothing is searched before the user chose what to hide in the video.
+        guard v.isReady, v.purpose != nil, v.textScanning == nil, v.textState != .waiting else { return }
         if v.purpose == .faces { v.purpose = .both }  // text asked for later
         v.text = nil
         v.textMask = nil
         v.textOptions = nil
+        v.textMaskOptions = nil
+        v.textMaskRequest += 1
         v.textLines = []
         v.textState = .waiting
         processTextQueue()
@@ -664,9 +672,24 @@ final class AppModel {
     private func updateTextMask(_ v: VideoItem) {
         guard let text = v.text else { return }
         let o = TextMaskOptions(kinds: textKinds, words: textWords, lines: v.textLines, all: v.textAll)
+        guard v.textOptions != o || v.textMaskOptions != o else { return }
         v.textOptions = o
-        v.textMask = text.mask(o)
-        if v.id == currentID { refreshLive() }
+        // Long recordings take a while: make it in the background. Export waits for it
+        // (`textMaskPending`), and a result for options changed meanwhile is dropped.
+        let id = v.id
+        v.textMaskRequest += 1
+        let request = v.textMaskRequest
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let mask = text.mask(o)
+            await self?.setTextMask(id, request, mask, for: o)
+        }
+    }
+
+    private func setTextMask(_ id: UUID, _ request: Int, _ mask: TextMask, for o: TextMaskOptions) {
+        guard let v = videos.first(where: { $0.id == id }), v.textMaskRequest == request else { return }
+        v.textMask = mask
+        v.textMaskOptions = o
+        if id == currentID { refreshLive() }
     }
 
     /// Hide every line that was read in the current video, or go back to the choices.
@@ -709,6 +732,17 @@ final class AppModel {
 
     func removeTextWord(_ word: String) {
         textWords.removeAll { $0 == word }
+    }
+
+    /// Change a word in place; emptied, it is removed, and a word already listed is not doubled.
+    func replaceTextWord(_ old: String, with new: String) {
+        let w = new.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard w != old, let i = textWords.firstIndex(of: old) else { return }
+        if w.isEmpty || textWords.contains(w) {
+            textWords.remove(at: i)
+        } else {
+            textWords[i] = w
+        }
     }
 
     // MARK: - Player
@@ -820,7 +854,8 @@ final class AppModel {
     /// steps do not change with the number of videos, and what will be written is shown.
     func requestExport() {
         let ready = exportable
-        guard !ready.isEmpty, !isExporting else { return }
+        // Not while the "what to hide" sheet is open: it would be hidden behind this one.
+        guard !ready.isEmpty, !isExporting, pendingPurpose.isEmpty else { return }
         // Pre-check what still needs writing; an already written, unchanged video stays
         // unchecked (writing it again would only add a numbered copy).
         var choice = Set(ready.filter { $0.hasUnexportedWork(mosaicParams) }.map(\.id))

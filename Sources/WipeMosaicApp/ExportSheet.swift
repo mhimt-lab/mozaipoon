@@ -5,7 +5,8 @@ import WipeMosaicCore
 struct ExportSheet: View {
     @Bindable var model: AppModel
 
-    private var candidates: [VideoItem] { model.videos.filter { $0.analysis != nil } }
+    /// Videos with something chosen to hide (faces, text or both), searched or still searching.
+    private var candidates: [VideoItem] { model.videos.filter { $0.isReady && $0.purpose != nil } }
     private var chosen: [VideoItem] { model.videos.filter { model.exportChoice.contains($0.id) && $0.canExport } }
 
     var body: some View {
@@ -36,7 +37,7 @@ struct ExportSheet: View {
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator))
             .padding(.horizontal, 24)
             if model.videos.count > candidates.count {
-                Text("開けない動画や、顔を探し終わっていない動画（\(model.videos.count - candidates.count)本）は表示していません。")
+                Text("開けない動画や、何を隠すか選んでいない動画（\(model.videos.count - candidates.count)本）は表示していません。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 24)
@@ -141,6 +142,14 @@ private struct ExportRow: View {
                     Text(detail)
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                    if video.canExport, let skipped = video.skippedSearch {
+                        Label {
+                            Text(skipped)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        }
+                        .font(.callout)
+                    }
                     if video.canExport, !video.uncheckedHints.isEmpty {
                         HStack(spacing: 8) {
                             Label {
@@ -165,9 +174,13 @@ private struct ExportRow: View {
     }
 
     private var detail: String {
+        if let searching = video.searchingLabel { return searching + "…終わると書き出せます" }
         if !video.hasChoices {
-            guard let a = video.analysis else { return "" }
-            return a.people.isEmpty ? "顔が見つかりませんでした" : "人を選んでいません"
+            var why: [String] = []
+            if let a = video.analysis { why.append(a.people.isEmpty ? "顔が見つかりませんでした" : "人を選んでいません") }
+            if video.text != nil { why.append("隠す文字がありません") }
+            if why.isEmpty, let skipped = video.skippedSearch { why.append(skipped) }
+            return why.joined(separator: "・")
         }
         let base = video.choiceSummary
         if video.job == .done, !video.resultIsStale(model.mosaicParams) { return base + "・書き出し済み" }

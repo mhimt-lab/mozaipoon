@@ -143,7 +143,7 @@ struct ViewerView: View {
     }
 
     private var hintText: (String, String)? {
-        guard video.analyzing == nil, video.analysis != nil else { return nil }
+        guard video.analyzing == nil, video.analysis != nil || video.text != nil else { return nil }
         switch model.viewMode {
         case .result: return ("書き出し結果（書き出したファイル）を表示しています", "film")
         case .original: return ("モザイクなし（元の動画）を表示しています", "eye")

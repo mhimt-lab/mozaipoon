@@ -96,6 +96,12 @@ final class VideoItem: Identifiable {
     /// Boxes for the current text options (kinds and words are app-wide, lines per video).
     var textMask: TextMask?
     var textOptions: TextMaskOptions?
+    /// The options `textMask` was made with (it is made in the background after a change).
+    var textMaskOptions: TextMaskOptions?
+    /// The mosaic for the current text options is still being made.
+    var textMaskPending: Bool { text != nil && textMaskOptions != textOptions }
+    /// Counts mask requests; only the result of the latest one is used.
+    @ObservationIgnored var textMaskRequest = 0
 
     init(url: URL) {
         self.url = url
@@ -126,7 +132,38 @@ final class VideoItem: Identifiable {
     func hasUnexportedWork(_ params: MosaicParams) -> Bool {
         hasChoices && (summary == nil || resultIsStale(params))
     }
-    var canExport: Bool { hasChoices && !job.isActive }
+    /// A search the user asked for is still waiting or running: writing now would leave out
+    /// what it finds (with "both", the faces or the text).
+    var stillSearching: Bool {
+        let faces = purpose?.findsFaces == true && (state == .waiting || analyzing != nil)
+        return faces || textState == .waiting || textScanning != nil
+    }
+    var canExport: Bool { hasChoices && !job.isActive && !stillSearching && !textMaskPending }
+    /// What is still being searched, for the export sheet.
+    var searchingLabel: String? {
+        guard stillSearching else { return nil }
+        let faces = purpose?.findsFaces == true && (state == .waiting || analyzing != nil)
+        let text = textState == .waiting || textScanning != nil
+        return faces && text ? "顔と画面の文字を探しています" : faces ? "顔を探しています" : "画面の文字を読み取っています"
+    }
+    /// A search the user asked for that was cancelled or failed: nothing it would have found
+    /// gets a mosaic.
+    var skippedSearch: String? {
+        var out: [String] = []
+        if purpose?.findsFaces == true, analysis == nil {
+            switch state {
+            case .cancelled, .failed: out.append("顔")
+            default: break
+            }
+        }
+        if purpose?.readsText == true, text == nil {
+            switch textState {
+            case .cancelled?, .failed?: out.append("画面の文字")
+            default: break
+            }
+        }
+        return out.isEmpty ? nil : "\(out.joined(separator: "と"))は探していないので、モザイクがかかりません"
+    }
 
     /// "3人中 1人・文字 12行にモザイク" for the sidebar and the export sheet.
     var choiceSummary: String {
