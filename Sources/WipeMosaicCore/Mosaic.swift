@@ -138,9 +138,11 @@ func forEachFrame(
 /// only every `tileInterval` seconds (0 = every frame). Callers must bridge the frames in
 /// between (track interpolation or hold). Several frames are detected concurrently so CPU
 /// work (cropping) overlaps the Vision requests. `body` is called once per frame, in order.
+/// `batch` 4–6 was fastest; 8 was ~15% slower with identical results (1080p60, 2 min, M3 Max,
+/// 2026-11-14: 2 → 102s, 3 → 93s, 4–6 → 89–90s, 8 → 105s, 16 → 100s).
 func forEachFrameDetecting(
     asset: AVURLAsset, info: VideoInfo, tiles: Int, tileInterval: Double = 0, extraRegions: [CGRect],
-    batch: Int = 8,
+    batch: Int = 4,
     _ body: (_ index: Int, _ time: Double, _ image: CIImage, _ faces: [CGRect]) throws -> Void
 ) throws {
     let tileEvery = max(1, Int((tileInterval * max(info.fps, 1)).rounded()))
