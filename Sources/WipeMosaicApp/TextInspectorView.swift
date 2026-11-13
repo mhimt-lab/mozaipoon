@@ -54,7 +54,7 @@ struct TextInspectorView: View {
             if let text = video.text, video.textState == .done {
                 if video.textMaskPending {
                     Label {
-                        Text("モザイクを作り直しています…")
+                        Text("隠す範囲を作り直しています…")
                     } icon: {
                         ProgressView().controlSize(.small)
                     }
@@ -94,7 +94,7 @@ struct TextInspectorView: View {
         Section {
             Text(video.textAll
                  ? "この動画は、読み取れた文字をすべて隠しています（下の「この動画だけ」）。"
-                 : "見つかった部分だけにモザイクをかけ、行のほかの文字は残します。外した種類は、ほかの動画でも隠しません。")
+                 : "見つかった部分だけを隠し、行のほかの文字は残します。外した種類は、ほかの動画でも隠しません。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -340,7 +340,7 @@ private struct TextLineRow: View {
                 .toggleStyle(.checkbox)
                 .labelsHidden()
                 .disabled(video.textAll)
-                .help(whole ? "押すと、行全体のモザイクを外します" : "押すと、行全体にモザイクをかけます")
+                .help(whole ? "押すと、行全体を隠すのをやめます" : "押すと、行全体を隠します")
             Button {
                 model.seek(to: text.times[entry.firstFrame])
             } label: {
@@ -363,7 +363,7 @@ private struct TextLineRow: View {
             if whole || partly {
                 Image(systemName: "eye.slash")
                     .foregroundStyle(Color.accentColor)
-                    .help(whole ? "行全体にモザイク" : "一部にモザイク")
+                    .help(whole ? "行全体を隠しています" : "一部を隠しています")
             }
         }
         .padding(.vertical, 2)
