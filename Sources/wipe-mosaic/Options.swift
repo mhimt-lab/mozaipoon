@@ -41,6 +41,7 @@ enum Command {
     case facesDist([URL])
     case people(input: URL, outDir: URL?, render: RenderSettings, photos: [URL], match: URL?)
     case text(input: URL, options: TextMaskOptions, list: Bool)
+    case selfCheck
     case help
 }
 
@@ -59,6 +60,7 @@ let usage = """
       wipe-mosaic people <input> --match <other video>   (distance from each person to the
                                                     people of another video)
       wipe-mosaic text <input> [--text-kinds ...] [--words ...] [--list]
+      wipe-mosaic selfcheck   (regression checks of the rules that find personal information)
                                                    (text found on screen; --list prints the text)
       wipe-mosaic run <input> <output> (--wipe ... | --people ... | --screen-text) [options]
       wipe-mosaic preview <input> --wipe ... --at <seconds> -o <png> [options]
@@ -105,6 +107,7 @@ private func parseDouble(_ s: String?, _ name: String, range: ClosedRange<Double
 extension Command {
     static func parse(_ args: [String]) throws -> Command {
         guard let sub = args.first, sub != "-h", sub != "--help", sub != "help" else { return .help }
+        if sub == "selfcheck" { return .selfCheck }
         guard ["run", "preview", "info", "frame", "faces-dist", "people", "text"].contains(sub) else {
             throw ToolError("unknown command '\(sub)'\n\n\(usage)")
         }

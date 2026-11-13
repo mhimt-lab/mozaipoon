@@ -97,18 +97,21 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
         // of a spaced word (山田 さくら), or katakana (山田サクラ).
         var given = 0
         while j + given < chars.count, given < 3, isKanji(chars[j + given]) { given += 1 }
-        if given == 0, spaced || !m.short {
-            while j + given < chars.count, given < 5, isHiragana(chars[j + given]) || isKatakana(chars[j + given]),
-                  !honorific(at: j + given, polite: false) { given += 1 }
+        if given == 0, spaced || !m.short, j < chars.count, isHiragana(chars[j]) || isKatakana(chars[j]) {
+            // One script: katakana (サクラ) stops at the hiragana after it (サクラです).
+            let kana: (Character) -> Bool = isKatakana(chars[j]) ? isKatakana : isHiragana
+            while j + given < chars.count, given < 5, kana(chars[j + given]), !honorific(at: j + given, polite: false) {
+                given += 1
+            }
             let stop = j + given
             let ok: Bool
             if honorific(at: stop, polite: false) {
-                ok = true
-            } else if spaced {
-                ok = stop == chars.count || chars[stop].isWhitespace
+                ok = true  // 山田さくらさん
+            } else if stop == chars.count || chars[stop].isWhitespace {
+                // 山田 さくら, 山田サクラ, and a line that is just 山田さくら (a contact name)
+                ok = spaced || isKatakana(chars[j]) || String(chars[i..<stop]) == trimmed
             } else {
-                ok = chars[j..<stop].allSatisfy(isKatakana)
-                    && (stop == chars.count || !isKatakana(chars[stop]) && !isKanji(chars[stop]))
+                ok = !spaced && isKatakana(chars[j]) && !isKanji(chars[stop])  // 山田サクラです
             }
             if given < 2 || !ok { given = 0 }
         }
@@ -125,7 +128,11 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
             upper = end  // the line is just the name
         }
         if let u = upper {
-            out.append(idx[i]..<idx[u])
+            // Inside a word, the family name may be longer than the one found (桑原さん found
+            // as 原さん, 大森さん as 森さん): hide up to 2 kanji before it too.
+            var start = i
+            while inWord, start > 0, i - start < 2, isKanji(chars[start - 1]) { start -= 1 }
+            out.append(idx[start]..<idx[u])
             i = u
         } else {
             i += 1

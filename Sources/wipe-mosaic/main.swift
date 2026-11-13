@@ -20,6 +20,11 @@ do {
     case .people(let input, let outDir, let render, let photos, let match):
         try await listPeople(input: input, outDir: outDir, render: render, photos: photos, match: match)
     case .text(let input, let options, let list): try await listText(input: input, options: options, list: list)
+    case .selfCheck:
+        let failures = selfCheck()
+        for f in failures { print("FAIL \(f)") }
+        guard failures.isEmpty else { fail("\(failures.count) check(s) failed") }
+        print("selfcheck: all passed")
     }
 } catch let e as ToolError {
     fail(e.description)

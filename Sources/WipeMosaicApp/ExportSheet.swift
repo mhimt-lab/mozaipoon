@@ -175,11 +175,12 @@ private struct ExportRow: View {
 
     private var detail: String {
         if let searching = video.searchingLabel { return searching + "…終わると書き出せます" }
+        if video.textMaskPending { return "文字のモザイクを作っています…" }
         if !video.hasChoices {
             var why: [String] = []
             if let a = video.analysis { why.append(a.people.isEmpty ? "顔が見つかりませんでした" : "人を選んでいません") }
             if video.text != nil { why.append("隠す文字がありません") }
-            if why.isEmpty, let skipped = video.skippedSearch { why.append(skipped) }
+            if let skipped = video.skippedSearch { why.append(skipped) }
             return why.joined(separator: "・")
         }
         let base = video.choiceSummary

@@ -119,7 +119,8 @@ struct TextInspectorView: View {
             }
             if model.addingTextWord || model.textWords.isEmpty {
                 // Return adds the word and leaves a new empty field, to type the next one.
-                WordField(model: model, word: "", focused: model.addingTextWord, commit: { w in
+                WordField(model: model, word: "", focused: model.addingTextWord,
+                          canDelete: !model.textWords.isEmpty, commit: { w in
                     if w.trimmingCharacters(in: .whitespaces).isEmpty {
                         model.addingTextWord = false
                     } else {
@@ -309,6 +310,8 @@ private struct WordField: View {
     @Bindable var model: AppModel
     let word: String
     var focused = false
+    /// The only (empty) field of an empty list cannot be closed.
+    var canDelete = true
     let commit: (String) -> Void
     let delete: () -> Void
     @FocusState private var isFocused: Bool
@@ -319,9 +322,10 @@ private struct WordField: View {
                 get: { model.wordDrafts[word] ?? word }, set: { model.wordDrafts[word] = $0 }))
                 .textFieldStyle(.roundedBorder)
                 .focused($isFocused)
-                .onSubmit(apply)
-                .onChange(of: isFocused) { _, now in if !now { apply() } }
+                .onSubmit { apply(submitted: true) }
+                .onChange(of: isFocused) { _, now in if !now { apply(submitted: false) } }
                 .accessibilityLabel(word.isEmpty ? "新しく隠す言葉" : "隠す言葉「\(word)」")
+            if canDelete {
             Button {
                 model.wordDrafts[word] = nil
                 delete()
@@ -332,17 +336,20 @@ private struct WordField: View {
             }
             .buttonStyle(.borderless)
             .help(word.isEmpty ? "この欄を閉じます" : "この言葉を隠すのをやめます")
+            }
         }
         .onAppear { if focused { isFocused = true } }
+        // Switching tabs or videos removes the field without a focus change: apply it then too.
+        .onDisappear { apply(submitted: false) }
         .onChange(of: focused) { _, f in if f { isFocused = true } }
     }
 
-    private func apply() {
+    private func apply(submitted: Bool) {
         let text = model.wordDrafts.removeValue(forKey: word) ?? word
         guard text != word || word.isEmpty else { return }  // the new field left empty closes
         commit(text)
-        if word.isEmpty, !text.trimmingCharacters(in: .whitespaces).isEmpty {
-            isFocused = true  // the new-word field stays, empty, for the next word
-        }
+        // After Return, the new-word field stays, empty, for the next word. Not when the field
+        // was left by clicking another one: that one keeps the focus.
+        if submitted, word.isEmpty, !text.trimmingCharacters(in: .whitespaces).isEmpty { isFocused = true }
     }
 }

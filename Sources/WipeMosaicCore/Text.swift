@@ -68,12 +68,26 @@ public struct TextTrack: Sendable {
         let b = samples[lo]
         guard b.frame != f, lo > 0 else { return b.rect }
         let a = samples[lo - 1]
-        let u = CGFloat((t - times[a.frame]) / max(times[b.frame] - times[a.frame], 1e-6))
-        // Scrolling speeds up and slows down, so the line is not where straight-line motion
-        // puts it: widen the box along the motion, by up to 40 % of it halfway.
-        let spread = 1.6 * u * (1 - u)
-        let dx = abs(b.rect.midX - a.rect.midX) * spread, dy = abs(b.rect.midY - a.rect.midY) * spread
-        return lerp(a.rect, b.rect, u).insetBy(dx: -dx, dy: -dy).intersection(bounds)
+        return lerp(a.rect, b.rect, CGFloat((t - times[a.frame]) / max(times[b.frame] - times[a.frame], 1e-6)))
+    }
+
+    /// Margin to add around what is hidden at frame `f` between two recognized frames.
+    /// Scrolling speeds up and slows down, so the line is not where straight-line motion puts
+    /// it: up to 40 % of the motion, halfway. Added to each hidden part (not to the line box,
+    /// where a narrow part would get only its share of it).
+    func motionMargin(atFrame f: Int, times: [Double]) -> CGSize {
+        guard f > first, f < last else { return .zero }
+        var lo = 0, hi = samples.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if samples[mid].frame < f { lo = mid + 1 } else { hi = mid }
+        }
+        let b = samples[lo]
+        guard b.frame != f, lo > 0 else { return .zero }
+        let a = samples[lo - 1]
+        let u = (times[f] - times[a.frame]) / max(times[b.frame] - times[a.frame], 1e-6)
+        let spread = CGFloat(1.6 * u * (1 - u))
+        return CGSize(width: abs(b.rect.midX - a.rect.midX) * spread, height: abs(b.rect.midY - a.rect.midY) * spread)
     }
 }
 
@@ -147,6 +161,8 @@ public struct ScreenText: Sendable {
         return min(lo, t.first)...max(hi, t.last)
     }
 
+    /// Boxes to mosaic for the options. Stops early (with a partial result) when the task is
+    /// cancelled: the app makes masks in the background and drops outdated ones.
     public func mask(_ o: TextMaskOptions) -> TextMask {
         let bounds = CGRect(origin: .zero, size: size)
         let words = o.words.map(normalizedForMatch).filter { !$0.isEmpty }
@@ -155,21 +171,13 @@ public struct ScreenText: Sendable {
         var wordHits = Set<Int>()
         var hidden = Set<Int>()
         var relsOf: [Int: [CGRect]] = [:]
-        func add(_ rels: [CGRect], line: CGRect, at f: Int) {
+        func add(_ rels: [CGRect], line: CGRect, margin: CGSize = .zero, at f: Int) {
             let h = line.height
             for rel in rels {
                 let r = CGRect(
                     x: line.minX + rel.minX * line.width, y: line.minY + rel.minY * line.height,
                     width: rel.width * line.width, height: rel.height * line.height)
-                frames[f].append(r.insetBy(dx: -h * 0.35, dy: -h * 0.3).intersection(bounds))
-            }
-        }
-        func hide(_ t: TextTrack, _ rels: [CGRect]) {
-            hidden.insert(owner[t.id] ?? 0)
-            relsOf[t.id] = rels
-            for f in frameRange(t) {
-                guard let line = t.rect(atFrame: f, times: times, extend: extend, bounds: bounds), !line.isEmpty else { continue }
-                add(rels, line: line, at: f)
+                frames[f].append(r.insetBy(dx: -h * 0.35 - margin.width, dy: -h * 0.3 - margin.height).intersection(bounds))
             }
         }
         for t in tracks {
@@ -185,21 +193,21 @@ public struct ScreenText: Sendable {
                     rels += w
                 }
             }
-            guard !rels.isEmpty else { continue }
-            hide(t, mergeOverlapping(rels))
+            if !rels.isEmpty { relsOf[t.id] = mergeOverlapping(rels) }
         }
         // A line that could not be read for a moment (covered by a banner, blurred by motion)
         // continues as a new track, and a line read differently (O90 for 090) is a new track
-        // that may match nothing: when a line with similar text (with `all`, any text) comes
-        // back at the same place, hide it like the line before and keep the mosaic across the
-        // gap. Tracks are taken in order of appearance, so the continuation carries on further.
-        // Filmed screens drop lines for longer (glare, focus, fingers); any text at the place
-        // counts there, so a longer gap is still the same screen.
+        // that may match nothing: a track is continued by the nearest one that starts within
+        // `maxGap` at the same place with similar text (with `all`, any text). The parts to
+        // hide are shared along each chain of continuations, both ways (the misread one may
+        // come first), and the mosaic is kept across the gaps. Filmed screens drop lines for
+        // longer (glare, focus, fingers); any text at the place counts there.
         let maxGap = o.all ? 6.0 : 3.0
         let byStart = tracks.sorted { $0.first < $1.first }
         let starts = byStart.map(\.first)
+        var next: [Int: TextTrack] = [:]  // track id → its continuation
         for a in byStart {
-            guard let rels = relsOf[a.id] else { continue }
+            if Task.isCancelled { break }
             let ra = a.samples[a.samples.count - 1].rect
             let ta = times[a.last]
             var k = starts.partitionIndex { $0 > a.last }
@@ -211,12 +219,33 @@ public struct ScreenText: Sendable {
                       rb.height > 0.6 * ra.height, rb.height < 1.6 * ra.height,
                       o.all || similarity(normalizedForMatch(a.text), normalizedForMatch(b.text)) >= 0.6
                 else { continue }
-                if relsOf[b.id] == nil { hide(b, rels) }
-                let tb = times[b.first]
-                for f in (a.last + 1)..<b.first where times[f] > ta + extend && times[f] < tb - extend {
+                next[a.id] = b
+                break  // the nearest continuation is enough
+            }
+        }
+        // Forward then backward: every track of a chain ends with the union of its parts.
+        for a in byStart {
+            guard let b = next[a.id], let ra = relsOf[a.id] else { continue }
+            relsOf[b.id] = mergeOverlapping((relsOf[b.id] ?? []) + ra)
+        }
+        for a in byStart.reversed() {
+            guard let b = next[a.id], let rb = relsOf[b.id] else { continue }
+            relsOf[a.id] = mergeOverlapping((relsOf[a.id] ?? []) + rb)
+        }
+        for t in tracks {
+            if Task.isCancelled { break }
+            guard let rels = relsOf[t.id] else { continue }
+            hidden.insert(owner[t.id] ?? 0)
+            for f in frameRange(t) {
+                guard let line = t.rect(atFrame: f, times: times, extend: extend, bounds: bounds), !line.isEmpty else { continue }
+                add(rels, line: line, margin: t.motionMargin(atFrame: f, times: times), at: f)
+            }
+            if let b = next[t.id] {
+                let ra = t.samples[t.samples.count - 1].rect, rb = b.samples[0].rect
+                let ta = times[t.last], tb = times[b.first]
+                for f in (t.last + 1)..<b.first where times[f] > ta + extend && times[f] < tb - extend {
                     add(rels, line: lerp(ra, rb, CGFloat((times[f] - ta) / max(tb - ta, 1e-6))), at: f)
                 }
-                break  // the nearest continuation is enough
             }
         }
         // Words also count for entries that are hidden as a whole line.
@@ -273,13 +302,16 @@ public func analyzeText(
     try forEachFrame(asset: asset, info: info) { i, t, image in
         times.append(t)
         let thumb = thumbnail(image, ctx)
-        if let lastThumb, !differs(lastThumb, thumb), t - lastTime < recheck {
+        let unchanged = lastThumb.map { !differs($0, thumb) } ?? false
+        if unchanged, t - lastTime < recheck {
             unchangedUntil = i
         } else if t - lastTime >= interval - 1e-6 {
             // Pin the lines where they were until the picture started to change.
             if let u = unchangedUntil, u > lastRecognized { builder.add(frame: u, lines: lastLines, pin: true) }
             lastLines = try recognizeLines(image, bounds: bounds)
-            builder.add(frame: i, lines: lastLines)
+            // Read again only because time passed: a new line was there since the last reading,
+            // too small a change to see (the picture looked the same).
+            builder.add(frame: i, lines: lastLines, newSince: unchanged ? lastRecognized + 1 : nil)
             lastRecognized = i
             lastTime = t
             lastThumb = thumb
@@ -294,7 +326,7 @@ public func analyzeText(
         tracks[k].text = mostCommonReading(tracks[k])
         tracks[k].parts = kindParts(tracks[k], size: info.size)
     }
-    addAddressContinuations(&tracks, times: times, bounds: bounds)
+    addContinuations(&tracks, times: times, bounds: bounds, size: info.size)
     // One entry per distinct text, in order of first appearance.
     var groups: [String: [Int]] = [:]
     var order: [String] = []
@@ -367,7 +399,8 @@ private struct TrackBuilder {
 
     /// `pin`: the lines of the last recognition again, at the last frame before the picture
     /// changed. Not a new recognition, so it does not count toward `maxMissed`.
-    mutating func add(frame: Int, lines: [(CGRect, VNRecognizedText)], pin: Bool = false) {
+    /// `newSince`: lines not matched to a track have been there since this frame.
+    mutating func add(frame: Int, lines: [(CGRect, VNRecognizedText)], pin: Bool = false, newSince: Int? = nil) {
         if !pin { pass += 1 }
         let open = tracks.indices.filter { tracks[$0].last < frame && pass - lastPass[$0] <= maxMissed + 1 }
         var pairs: [(cost: Double, line: Int, track: Int)] = []
@@ -395,7 +428,11 @@ private struct TrackBuilder {
             lastPass[p.track] = pass
         }
         for (l, (rect, text)) in lines.enumerated() where !usedLines.contains(l) {
-            tracks.append(TextTrack(id: tracks.count, samples: [TextSample(frame: frame, rect: rect, string: text.string, text: text)]))
+            var samples = [TextSample(frame: frame, rect: rect, string: text.string, text: text)]
+            if let since = newSince, since < frame {
+                samples.insert(TextSample(frame: since, rect: rect, string: text.string, text: nil), at: 0)
+            }
+            tracks.append(TextTrack(id: tracks.count, samples: samples))
             lastPass.append(pass)
         }
     }
@@ -427,30 +464,65 @@ private func kindParts(_ t: TextTrack, size: CGSize) -> [TextKind: [CGRect]] {
     return out.mapValues(mergeOverlapping)
 }
 
-/// An address often continues on the next line (building name, room number) that matches no
-/// pattern by itself: hide the whole line right below a line with an address, in the same
-/// column (same left edge, similar height, line spacing apart). Only one line further, from
-/// lines whose own text matched, so a long paragraph is not swallowed.
-private func addAddressContinuations(_ tracks: inout [TextTrack], times: [Double], bounds: CGRect) {
-    let owners = tracks.indices.filter { tracks[$0].parts[.address] != nil }
-    for a in owners {
-        let ta = tracks[a]
-        for b in tracks.indices where b != a && tracks[b].parts[.address] != [whole] {
-            let tb = tracks[b]
-            // Both on screen at a frame where `a` was read (`b` may have been missed there).
-            guard tb.first <= ta.last, ta.first <= tb.last,
-                  let s = ta.samples.first(where: { $0.frame >= tb.first && $0.frame <= tb.last }),
-                  let rb = tb.rect(atFrame: s.frame, times: times, extend: 0, bounds: bounds)
-            else { continue }
-            let ra = s.rect
-            let h = ra.height
-            let gap = ra.minY - rb.maxY  // Core Image coordinates: y grows upward
-            guard gap > -0.3 * h, gap < 0.8 * h, abs(rb.minX - ra.minX) < 1.5 * h,
-                  rb.height > 0.7 * h, rb.height < 1.4 * h
-            else { continue }
-            tracks[b].parts[.address] = [whole]
+/// Information often continues on the next line: an address (building name, room number)
+/// that matches no pattern by itself, and an email address or URL wrapped at the end of the
+/// line. Hide the whole line right below an address, and the start of the line right below
+/// an email address or URL that reaches the end of its line. "Below" is the same column:
+/// same left edge, similar height, line spacing apart. Only one line further, from lines
+/// whose own text matched, so a long paragraph is not swallowed.
+private func addContinuations(_ tracks: inout [TextTrack], times: [Double], bounds: CGRect, size: CGSize) {
+    let wrapped: [Int: Set<TextKind>] = tracks.indices.reduce(into: [:]) { out, k in
+        for s in distinctReadings(tracks[k]) {
+            let end = s.string.trimmingCharacters(in: .whitespaces).endIndex
+            for (kind, r) in findKinds(in: s.string) where (kind == .email || kind == .url) && r.upperBound >= end {
+                out[k, default: []].insert(kind)
+            }
         }
     }
+    let owners = tracks.indices.filter { tracks[$0].parts[.address] != nil || wrapped[$0] != nil }
+    var changes: [(Int, TextKind, [CGRect])] = []
+    for a in owners {
+        let ta = tracks[a]
+        for b in tracks.indices where b != a {
+            let tb = tracks[b]
+            guard isLine(tb, below: ta, times: times, bounds: bounds) else { continue }
+            if ta.parts[.address] != nil { changes.append((b, .address, [whole])) }
+            for kind in wrapped[a] ?? [] {
+                // The rest of the address or URL: the letters, digits and symbols at the start.
+                var parts: [CGRect] = []
+                for s in distinctReadings(tb) {
+                    if let r = s.string.range(of: "^\\s*[A-Za-z0-9._%+\\-/@?=&#~:]+", options: .regularExpression) {
+                        parts.append(relativeBox(s, range: r, size: size) ?? whole)
+                    }
+                }
+                if !parts.isEmpty { changes.append((b, kind, parts)) }
+            }
+        }
+    }
+    for (b, kind, parts) in changes {
+        tracks[b].parts[kind] = mergeOverlapping((tracks[b].parts[kind] ?? []) + parts)
+    }
+}
+
+/// `b` is the next line under `a` in the same column, at a frame where both are on screen:
+/// one where both were read if there is one, else one where either was read (the other's
+/// place interpolated).
+private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], bounds: CGRect) -> Bool {
+    let lo = max(a.first, b.first), hi = min(a.last, b.last)
+    guard lo <= hi else { return false }
+    let fa = Set(a.sampleFrames.filter { $0 >= lo && $0 <= hi }), fb = Set(b.sampleFrames.filter { $0 >= lo && $0 <= hi })
+    let both = fa.intersection(fb)
+    for f in both.sorted() + fa.union(fb).subtracting(both).sorted() {
+        guard let ra = a.rect(atFrame: f, times: times, extend: 0, bounds: bounds),
+              let rb = b.rect(atFrame: f, times: times, extend: 0, bounds: bounds)
+        else { continue }
+        let h = ra.height
+        let gap = ra.minY - rb.maxY  // Core Image coordinates: y grows upward
+        if gap > -0.3 * h, gap < 0.8 * h, abs(rb.minX - ra.minX) < 1.5 * h, rb.height > 0.7 * h, rb.height < 1.4 * h {
+            return true
+        }
+    }
+    return false
 }
 
 private let whole = CGRect(x: 0, y: 0, width: 1, height: 1)
@@ -596,4 +668,69 @@ private func similarity(_ a: String, _ b: String) -> Double {
         swap(&prev, &cur)
     }
     return 1 - Double(prev[y.count]) / Double(max(x.count, y.count))
+}
+
+// MARK: - Self check (see SelfCheck.swift)
+
+/// Synthetic tracks for the rules of `mask` and `addContinuations` (no recognition needed).
+func selfCheckMask() -> [String] {
+    var failures: [String] = []
+    func expect(_ ok: Bool, _ what: String) { if !ok { failures.append(what) } }
+    let size = CGSize(width: 1000, height: 1000)
+    let bounds = CGRect(origin: .zero, size: size)
+    let times = (0..<120).map { Double($0) / 30 }
+    func track(_ id: Int, _ frames: ClosedRange<Int>, y: CGFloat, _ text: String, x: CGFloat = 100) -> TextTrack {
+        var t = TextTrack(id: id, samples: [frames.lowerBound, frames.upperBound].map {
+            TextSample(frame: $0, rect: CGRect(x: x, y: y, width: 600, height: 40), string: text, text: nil)
+        })
+        t.text = text
+        return t
+    }
+    func screen(_ tracks: [TextTrack]) -> ScreenText {
+        let entries = tracks.map {
+            TextEntry(id: $0.id + 1, text: $0.text, trackIDs: [$0.id], firstFrame: $0.first,
+                      frameCount: $0.last - $0.first + 1, kinds: Set($0.parts.keys))
+        }
+        return ScreenText(times: times, fps: 30, size: size, tracks: tracks, entries: entries, extend: 0.1)
+    }
+    let all = Set(TextKind.allCases)
+    let phone = CGRect(x: 0.1, y: 0, width: 0.3, height: 1), link = CGRect(x: 0.6, y: 0, width: 0.3, height: 1)
+
+    // A chain read differently: misread first (nothing found), then the phone number, then a
+    // misread with only the URL. Every track gets both parts, and the gaps stay hidden.
+    var a = track(0, 0...10, y: 500, "電話 O9O-1234-5678 https://x.jp")
+    var b = track(1, 20...30, y: 500, "電話 090-1234-5678 https://x.jp")
+    var c = track(2, 40...50, y: 500, "電話 O9O-1234-S678 https://x.jp")
+    a.parts = [:]
+    b.parts = [.number: [phone], .url: [link]]
+    c.parts = [.url: [link]]
+    let m = screen([a, b, c]).mask(TextMaskOptions(kinds: all, words: [], lines: []))
+    expect(m.frames[5].count == 2, "chain: misread first track gets both parts (\(m.frames[5].count))")
+    expect(m.frames[45].count == 2, "chain: later track keeps the earlier parts (\(m.frames[45].count))")
+    expect(!m.frames[15].isEmpty && !m.frames[35].isEmpty, "chain: gaps hidden")
+    expect(m.hidden == [1, 2, 3], "chain: all entries hidden (\(m.hidden.sorted()))")
+
+    // Not a continuation: other text at the place.
+    var e = track(0, 0...10, y: 500, "電話 090-1234-5678")
+    e.parts = [.number: [phone]]
+    var f = track(1, 20...30, y: 500, "まったく別の文章がここに出ています")
+    f.parts = [:]
+    let m3 = screen([e, f]).mask(TextMaskOptions(kinds: all, words: [], lines: []))
+    expect(m3.frames[25].isEmpty, "chain: other text is not hidden")
+
+    // An address continues on the line below, also while scrolling with the two lines read at
+    // different frames. (Wrapped URLs need recognized text with boxes: checked on screen.mov.)
+    var addr = TextTrack(id: 0, samples: [
+        TextSample(frame: 0, rect: CGRect(x: 100, y: 600, width: 600, height: 40), string: "東京都みほん区", text: nil),
+        TextSample(frame: 30, rect: CGRect(x: 100, y: 300, width: 600, height: 40), string: "東京都みほん区", text: nil),
+    ])
+    addr.parts = [.address: [CGRect(x: 0, y: 0, width: 1, height: 1)]]
+    let below = TextTrack(id: 1, samples: [
+        TextSample(frame: 3, rect: CGRect(x: 100, y: 540, width: 500, height: 40), string: "テストハイツ402", text: nil),
+        TextSample(frame: 27, rect: CGRect(x: 100, y: 270, width: 500, height: 40), string: "テストハイツ402", text: nil),
+    ])
+    var tracks = [addr, below]
+    addContinuations(&tracks, times: times, bounds: bounds, size: size)
+    expect(tracks[1].parts[.address] != nil, "address: the line below is hidden")
+    return failures
 }

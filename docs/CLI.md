@@ -9,6 +9,7 @@ wipe-mosaic run <動画> <出力> --wipe x,y,w,h                          # ワ�
 wipe-mosaic run <動画> <出力> --screen-text [--words 山田,花子]      # 画面の文字の個人情報（下）
 wipe-mosaic text <動画> [--words 山田,花子] [--list]                  # 画面の文字の件数（--list で文字も出す）
 wipe-mosaic info <動画>                                               # サイズ・長さ・fps（JSON）
+wipe-mosaic selfcheck                                                 # 個人情報を見つける規則の回帰チェック（動画不要）
 ```
 
 - 画面に出すのは件数・秒数・距離だけ（顔の座標や画像の中身は出さない）

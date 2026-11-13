@@ -199,7 +199,10 @@ final class AppModel {
     /// Videos with people chosen that are not being written.
     var exportable: [VideoItem] { videos.filter(\.canExport) }
     var isExporting: Bool { exportProgress != nil }
-    var canExport: Bool { !exportable.isEmpty && !isExporting }
+    /// Also with a word typed but not applied yet: the export applies it first.
+    var canExport: Bool {
+        !isExporting && (!exportable.isEmpty || wordDrafts.contains { $0.key != $0.value } && videos.contains { $0.text != nil })
+    }
 
     // MARK: Export sheet (choose videos when more than one can be written)
     var showingExportSheet = false
@@ -672,16 +675,30 @@ final class AppModel {
     private func updateTextMask(_ v: VideoItem) {
         guard let text = v.text else { return }
         let o = TextMaskOptions(kinds: textKinds, words: textWords, lines: v.textLines, all: v.textAll)
-        guard v.textOptions != o || v.textMaskOptions != o else { return }
+        guard v.textOptions != o else { return }  // made already, or being made
         v.textOptions = o
         // Long recordings take a while: make it in the background. Export waits for it
-        // (`textMaskPending`), and a result for options changed meanwhile is dropped.
+        // (`textMaskPending`, `ensureTextMask`); an outdated one is cancelled and dropped.
         let id = v.id
+        v.textMaskTask?.cancel()
         v.textMaskRequest += 1
         let request = v.textMaskRequest
-        Task.detached(priority: .userInitiated) { [weak self] in
+        v.textMaskTask = Task.detached(priority: .userInitiated) { [weak self] in
             let mask = text.mask(o)
+            guard !Task.isCancelled else { return }  // partial
             await self?.setTextMask(id, request, mask, for: o)
+        }
+    }
+
+    /// Make the mask for the current options now if the background one is not done (a video
+    /// waiting in the export queue while the options changed).
+    private func ensureTextMask(_ v: VideoItem) async {
+        while v.textMaskPending, let text = v.text, let o = v.textOptions {
+            v.textMaskTask?.cancel()
+            v.textMaskRequest += 1
+            let request = v.textMaskRequest
+            let mask = await Task.detached(priority: .userInitiated) { text.mask(o) }.value
+            if v.textMaskRequest == request { setTextMask(v.id, request, mask, for: o) }
         }
     }
 
@@ -732,6 +749,16 @@ final class AppModel {
 
     func removeTextWord(_ word: String) {
         textWords.removeAll { $0 == word }
+    }
+
+    /// Apply words typed but not confirmed with Return (the export button does not take the
+    /// focus from the field, so leaving it does not apply them).
+    func commitWordDrafts() {
+        let drafts = wordDrafts
+        wordDrafts = [:]
+        for (old, new) in drafts where new != old {
+            if old.isEmpty { addTextWord(new) } else { replaceTextWord(old, with: new) }
+        }
     }
 
     /// Change a word in place; emptied, it is removed, and a word already listed is not doubled.
@@ -853,13 +880,17 @@ final class AppModel {
     /// The one export entry point (toolbar button, ⌘E): always the same sheet, so the
     /// steps do not change with the number of videos, and what will be written is shown.
     func requestExport() {
-        let ready = exportable
+        commitWordDrafts()
+        // A word just applied remakes the text mosaic: those videos are offered too, and
+        // their rows turn on when it is done.
+        let soon: (VideoItem) -> Bool = { $0.canExport || ($0.textMaskPending && !$0.job.isActive && !$0.stillSearching) }
+        let ready = videos.filter(soon)
         // Not while the "what to hide" sheet is open: it would be hidden behind this one.
         guard !ready.isEmpty, !isExporting, pendingPurpose.isEmpty else { return }
         // Pre-check what still needs writing; an already written, unchanged video stays
         // unchecked (writing it again would only add a numbered copy).
-        var choice = Set(ready.filter { $0.hasUnexportedWork(mosaicParams) }.map(\.id))
-        if choice.isEmpty, let c = current, c.canExport { choice = [c.id] }
+        var choice = Set(ready.filter { $0.textMaskPending || $0.hasUnexportedWork(mosaicParams) }.map(\.id))
+        if choice.isEmpty, let c = current, soon(c) { choice = [c.id] }
         if choice.isEmpty { choice = [ready[0].id] }
         exportChoice = choice
         player.pause()
@@ -887,6 +918,7 @@ final class AppModel {
 
     /// Start writing the videos checked in the sheet.
     func confirmExport() {
+        commitWordDrafts()
         let targets = videos.filter { exportChoice.contains($0.id) && $0.canExport }
         showingExportSheet = false
         guard !targets.isEmpty, !isExporting else { return }
@@ -951,11 +983,14 @@ final class AppModel {
             if alertOnFailure { alert = AppAlert(title: "書き出せません", message: "保存形式は .mov か .mp4 にしてください。") }
             return
         }
+        await ensureTextMask(v)
         let frames = v.frames(hold: hold)
         let render = render(for: v)
         let selection = v.selected
         let params = mosaicParams
-        let textOptions = v.effectiveTextOptions
+        // What the frames were made with (not what is set now), so a later change shows as
+        // not written yet.
+        let textOptions = v.hiddenTextCount > 0 ? v.textMaskOptions : nil
         let started = Date()
         v.summary = nil
         v.resultItem = nil

@@ -102,6 +102,7 @@ final class VideoItem: Identifiable {
     var textMaskPending: Bool { text != nil && textMaskOptions != textOptions }
     /// Counts mask requests; only the result of the latest one is used.
     @ObservationIgnored var textMaskRequest = 0
+    @ObservationIgnored var textMaskTask: Task<Void, Never>?
 
     init(url: URL) {
         self.url = url
