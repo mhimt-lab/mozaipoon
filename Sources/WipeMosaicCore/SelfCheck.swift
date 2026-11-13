@@ -241,14 +241,15 @@ func selfCheckCover() -> [String] {
     let clear = image { _ in }
     expect(clear.map { (try? Sticker(cgImage: $0)) == nil } == true, "fully transparent image is refused")
 
-    // Flicker: thin dark strokes (text) moving by one pixel at a time under the mosaic. Each
-    // block must keep about the same colour (its average); taking the block-centre colour
-    // flipped it between black and white as the screen scrolled.
+    // Flicker: a thin dark stroke (text) moving across a block. The block must keep about the
+    // same colour (the average of the whole block: one 4 px bar per 32 px, wherever it is);
+    // taking the block-centre colour flipped it between black and white as the screen
+    // scrolled, and averaging only part of the block changed it as the bar went in and out.
     var blockValues: [Int] = []
-    for shift in 0..<8 {
+    for shift in stride(from: 0, to: 32, by: 3) {
         let w = 64, h = 32
         var data = [UInt8](repeating: 255, count: w * h * 4)
-        for y in 0..<h { for x in 0..<w where (x + shift) % 8 < 2 { for c in 0..<3 { data[(y * w + x) * 4 + c] = 0 } } }
+        for y in 0..<h { for x in 0..<w where (x + shift) % 32 < 4 { for c in 0..<3 { data[(y * w + x) * 4 + c] = 0 } } }
         let img = CIImage(bitmapData: Data(data), bytesPerRow: w * 4, size: CGSize(width: w, height: h),
                           format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
         var px = [UInt8](repeating: 0, count: 4)
@@ -257,6 +258,6 @@ func selfCheckCover() -> [String] {
         blockValues.append(Int(px[0]))
     }
     let blockSpread = (blockValues.max() ?? 0) - (blockValues.min() ?? 0)
-    expect(blockSpread <= 40, "mosaic block stays steady while thin strokes move: values \(blockValues)")
+    expect(blockSpread <= 12, "mosaic block stays steady while thin strokes move: values \(blockValues)")
     return failures
 }

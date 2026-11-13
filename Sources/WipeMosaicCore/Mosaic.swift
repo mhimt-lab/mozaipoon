@@ -194,15 +194,17 @@ struct FaceIndex: Sendable {
         return rects
     }
 
-    /// Boxes for the frame shown at `t` that are drawn without the face margin.
-    func exactRects(at t: Double) -> [CGRect] {
-        guard !frames.isEmpty else { return [] }
-        return frames[max(0, firstIndex(atOrAfter: t + 1e-3) - 1)].exact
+    /// Boxes for the frame shown at `t` that are drawn without the face margin, and the
+    /// corners their mosaic blocks line up with.
+    func exactRects(at t: Double) -> (rects: [CGRect], anchors: [CGPoint]) {
+        guard !frames.isEmpty else { return ([], []) }
+        let f = frames[max(0, firstIndex(atOrAfter: t + 1e-3) - 1)]
+        return (f.exact, f.exactAnchors)
     }
 
-    /// Everything to mosaic at `t`: faces (± hold, with the margin) and the exact boxes.
-    func allRects(at t: Double, hold: Double, pad: Double) -> [CGRect] {
-        mosaicRects(at: t, hold: hold).map { padded($0, pad) } + exactRects(at: t)
+    /// Faces to mosaic at `t` (± hold, with the margin).
+    func faceRects(at t: Double, hold: Double, pad: Double) -> [CGRect] {
+        mosaicRects(at: t, hold: hold).map { padded($0, pad) }
     }
 
     /// Faces covered by a sticker in the frame shown at `t` (held per person already, so no

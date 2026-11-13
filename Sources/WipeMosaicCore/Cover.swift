@@ -219,8 +219,10 @@ public final class Sticker: @unchecked Sendable {
 }
 
 /// Everything that hides one frame: boxes hidden with `render.style`, then stickers on top.
+/// `rects` are faces (margin included), `text` the on-screen text boxes (see `applyMosaic`).
 public func applyCover(
-    _ img: CIImage, rects: [CGRect], stickers: [StickerBox], render: RenderSettings, block: CGFloat
+    _ img: CIImage, rects: [CGRect], text: [CGRect] = [], textAnchors: [CGPoint] = [], stickers: [StickerBox],
+    render: RenderSettings, block: CGFloat
 ) -> CIImage {
     // The mosaic (or blur) with the usual margin goes under a sticker whose face was not
     // detected in this frame, under one that lets part of the face show (a hole, a
@@ -231,7 +233,9 @@ public func applyCover(
         return s.estimated || sticker.showsFace(scale: render.stickerScale)
     }.map { padded($0.rect, render.pad) }
     let all = rects + under
-    var out = render.style == .blur ? applyBlur(img, rects: all, block: block) : applyMosaic(img, rects: all, block: block)
+    var out = render.style == .blur
+        ? applyBlur(img, rects: all, moving: text, anchors: textAnchors, block: block)
+        : applyMosaic(img, rects: all, moving: text, anchors: textAnchors, block: block)
     for s in stickers {
         guard let sticker = render.stickers[s.person] else { continue }
         out = sticker.drawn(over: s.rect, scale: render.stickerScale).composited(over: out).cropped(to: img.extent)
@@ -244,11 +248,17 @@ public func applyCover(
 /// sharpening filter cannot bring back what a plain blur would only have spread out.
 /// Inside each box the blur is complete; it fades out over a short distance outside, so the
 /// edge does not look like a pasted grey square.
-public func applyBlur(_ img: CIImage, rects: [CGRect], block: CGFloat) -> CIImage {
+public func applyBlur(
+    _ img: CIImage, rects: [CGRect], moving: [CGRect] = [], anchors: [CGPoint] = [], block: CGFloat
+) -> CIImage {
     let ext = img.extent
-    let boxes = rects.map { $0.intersection(ext) }.filter { !$0.isNull && !$0.isEmpty }
+    let boxes = (rects + moving).map { $0.intersection(ext) }.filter { !$0.isNull && !$0.isEmpty }
     guard !boxes.isEmpty else { return img }
-    let blurred = pixellated(img, block: block).clampedToExtent()
+    // Blocks as in `applyMosaic` (text blocks move with the text): over the whole image when
+    // there are faces, else over the picture as it is (outside the boxes it only shows in the
+    // short fade).
+    let blocks = movingBlocks(img, over: rects.isEmpty ? img : pixellated(img, block: block), moving: moving, anchors: anchors, block: block)
+    let blurred = blocks.clampedToExtent()
         .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: block])
         .cropped(to: ext)
     var hard = CIImage.empty()

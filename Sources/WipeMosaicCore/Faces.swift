@@ -18,13 +18,19 @@ public struct FrameFaces: Sendable {
     public let kept: [CGRect]
     /// Other boxes to mosaic exactly as given (on-screen text, margin already included).
     public let exact: [CGRect]
+    /// For each of `exact`, the corner its mosaic blocks line up with (empty: each box's own).
+    public let exactAnchors: [CGPoint]
     /// Faces covered by a person's sticker instead of the mosaic (not in `mosaic`).
     public let stickers: [StickerBox]
-    public init(time: Double, mosaic: [CGRect], kept: [CGRect], exact: [CGRect] = [], stickers: [StickerBox] = []) {
+    public init(
+        time: Double, mosaic: [CGRect], kept: [CGRect], exact: [CGRect] = [], exactAnchors: [CGPoint] = [],
+        stickers: [StickerBox] = []
+    ) {
         self.time = time
         self.mosaic = mosaic
         self.kept = kept
         self.exact = exact
+        self.exactAnchors = exactAnchors
         self.stickers = stickers
     }
 
@@ -143,25 +149,47 @@ public func autoBlock(_ size: CGSize) -> CGFloat {
 /// (text) that move by a pixel flip whole blocks between black and white: heavy flicker when
 /// the screen scrolls or the camera moves, and over many frames the samples would show the
 /// actual pixels at many positions. Averaging first keeps each block steady.
-public func pixellated(_ img: CIImage, block: CGFloat) -> CIImage {
+/// The blocks line up with `origin` (default: the corner of the image).
+public func pixellated(_ img: CIImage, block: CGFloat, origin: CGPoint? = nil) -> CIImage {
     let ext = img.extent
+    let o = origin ?? ext.origin
     return img.clampedToExtent()
-        .applyingFilter("CIBoxBlur", parameters: [kCIInputRadiusKey: max(1, block / 2)])
-        .applyingFilter(
-            "CIPixellate",
-            parameters: [kCIInputScaleKey: block, kCIInputCenterKey: CIVector(x: ext.minX, y: ext.minY)]
-        )
+        // CIBoxBlur averages over (radius − 1) px (measured), so this is one block wide.
+        .applyingFilter("CIBoxBlur", parameters: [kCIInputRadiusKey: block + 1])
+        .applyingFilter("CIPixellate", parameters: [kCIInputScaleKey: block, kCIInputCenterKey: CIVector(x: o.x, y: o.y)])
         .cropped(to: ext)
 }
 
-public func applyMosaic(_ img: CIImage, rects: [CGRect], block: CGFloat) -> CIImage {
-    guard !rects.isEmpty else { return img }
+/// `rects` (faces) share one grid fixed to the image: a face box jitters a little every
+/// frame, and blocks fixed in place do not. Each of `moving` (on-screen text) has its blocks
+/// lined up with its anchor (where its line is; its own corner when `anchors` does not match),
+/// so they move with the text when the screen scrolls or the camera moves; on a grid fixed to
+/// the image the text slid under the blocks and they kept changing (wobbling) instead.
+public func applyMosaic(
+    _ img: CIImage, rects: [CGRect], moving: [CGRect] = [], anchors: [CGPoint] = [], block: CGFloat
+) -> CIImage {
+    guard !rects.isEmpty || !moving.isEmpty else { return img }
     let ext = img.extent
-    let pix = pixellated(img, block: block)
     var out = img
-    for r in rects {
+    if !rects.isEmpty {
+        let pix = pixellated(img, block: block)
+        for r in rects {
+            let c = r.intersection(ext)
+            if !c.isNull && !c.isEmpty { out = pix.cropped(to: c).composited(over: out) }
+        }
+    }
+    return movingBlocks(img, over: out, moving: moving, anchors: anchors, block: block)
+}
+
+/// The boxes of `moving` in blocks lined up with their anchors, drawn over `base`.
+func movingBlocks(_ img: CIImage, over base: CIImage, moving: [CGRect], anchors: [CGPoint], block: CGFloat) -> CIImage {
+    let ext = img.extent
+    var out = base
+    for (i, r) in moving.enumerated() {
         let c = r.intersection(ext)
-        if !c.isNull && !c.isEmpty { out = pix.cropped(to: c).composited(over: out) }
+        guard !c.isNull && !c.isEmpty else { continue }
+        let origin = anchors.count == moving.count ? anchors[i] : r.origin
+        out = pixellated(img, block: block, origin: origin).cropped(to: c).composited(over: out)
     }
     return out
 }
