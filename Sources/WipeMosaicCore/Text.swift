@@ -527,7 +527,7 @@ private func addContinuations(_ tracks: inout [TextTrack], times: [Double], exte
 
 /// Letters, digits, brackets and the symbols of addresses, URLs and numbers; "@" may have
 /// spaces around it as read ("hanako.yamada @"), and so may groups of digits ("090 12").
-private let wordChars = "(?:[A-Za-z0-9０-９._%+\\-‐－ー−/?=&#~:()（）\\[\\]]|\\s?[@＠]\\s?|(?<=[0-9０-９)）])\\s(?=[0-9０-９(（]))+"
+private let wordChars = "(?:[A-Za-z0-9０-９._%+\\-‐－ー−/?=&#~:()（）\\[\\]]|\\s{0,2}[@＠]\\s{0,2}|(?<=[0-9０-９)）])\\s+(?=[0-9０-９(（]))+"
 
 /// The first word of letters, digits and symbols of a line.
 func leadingWord(_ s: String) -> Range<String.Index>? {
@@ -558,8 +558,8 @@ func wrappedKind(_ upper: String, _ lower: String) -> TextKind? {
 /// `b` is the next line under `a`, at a frame where both are on screen (each continued
 /// `extend` seconds, as when hidden): one where both were read if there is one, else one
 /// where either was read (the other's place interpolated, or held where it was read: while
-/// scrolling, two lines read once each at different frames are not matched). Starting under
-/// `a` (a wrapped value in a column, a centered address) or at most 1.5 lines left of it. Two
+/// scrolling, two lines read once each at different frames are not matched). Overlapping `a`
+/// sideways, give or take 1.5 lines (a wrapped value in a column, a centered address). Two
 /// lines that were never read together still match within `extend` (glare or a finger may
 /// cover them in turn); a line of the next screen at the same place is hidden too then.
 private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend: Double, bounds: CGRect) -> Bool {
@@ -572,7 +572,7 @@ private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend:
         else { continue }
         let h = ra.height
         let gap = ra.minY - rb.maxY  // Core Image coordinates: y grows upward
-        let column = rb.minX > ra.minX - 1.5 * h && rb.minX < ra.maxX
+        let column = rb.maxX > ra.minX - 1.5 * h && rb.minX < max(ra.maxX, ra.minX + 1.5 * h)
         if gap > -0.3 * h, gap < 0.8 * h, column, rb.height > 0.7 * h, rb.height < 1.4 * h {
             return true
         }
@@ -807,6 +807,20 @@ func selfCheckMask() -> [String] {
     var centered = [upper, track(1, 10...11, y: 555, "テストハイツ402", x: 300)]
     addContinuations(&centered, times: times, extend: 0.35, bounds: bounds, size: size)
     expect(centered[1].parts[.address] != nil, "address: centered line below")
+    // A long line under a short address (a centered or right-aligned value column), and a
+    // line starting a little right of a short one.
+    var short = track(0, 10...11, y: 600, "東京都渋谷区", x: 300)
+    short.parts = [.address: [whole]]
+    var longBelow = [short, track(1, 10...11, y: 555, "神宮前1-2-3 テストハイツ402号室", x: 100)]
+    addContinuations(&longBelow, times: times, extend: 0.35, bounds: bounds, size: size)
+    expect(longBelow[1].parts[.address] != nil, "address: longer centered line below")
+    var tiny = TextTrack(id: 0, samples: [10, 11].map {
+        TextSample(frame: $0, rect: CGRect(x: 100, y: 600, width: 30, height: 40), string: "東京都", text: nil)
+    })
+    tiny.parts = [.address: [whole]]
+    var indentedBelow = [tiny, track(1, 10...11, y: 555, "テストハイツ402", x: 140)]
+    addContinuations(&indentedBelow, times: times, extend: 0.35, bounds: bounds, size: size)
+    expect(indentedBelow[1].parts[.address] != nil, "address: line below starting right of a short one")
     // Wrapped email address, URL and number through addContinuations (no recognized text:
     // the words are hidden with whole-line boxes).
     for (u, l) in [("共有先は example", ".com/private/yamada"), ("電話は 080-0000-", "2222 です"),

@@ -32,6 +32,19 @@ public func selfCheck() -> [String] {
         ("犬飼 太郎さん", ["犬飼 太郎"]), ("犬飼 さん", ["犬飼"]), ("犬飼さくらさん", ["犬飼さくら"]),
         ("犬飼サクラさん", ["犬飼サクラ"]), ("勅使河原さん", ["勅使河原"]), ("犬飼様", ["犬飼"]), ("犬飼健一様", ["犬飼健一"]),
         ("製品仕様", []), ("前回同様", []), ("お客様", []), ("時間がたくさん", []), ("田舎のおばあちゃん", []),
+        // Round 6: kana names starting with a particle letter, one-kanji given names after a
+        // space, 様 after names ending in 多 or 神, long kana names, three-kanji family names.
+        ("犬飼はるとさん", ["犬飼はると"]), ("犬飼まさひろさん", ["犬飼まさひろ"]), ("犬飼かなさん", ["犬飼かな"]),
+        ("犬飼ともこ様", ["犬飼ともこ"]), ("犬飼なつみちゃん", ["犬飼なつみ"]), ("犬飼のぞみさん", ["犬飼のぞみ"]),
+        ("犬飼 蓮さん", ["犬飼 蓮"]), ("犬飼 葵様", ["犬飼 葵"]), ("本多様", ["本多"]), ("石神様", ["石神"]),
+        ("犬飼しゅんすけさん", ["犬飼しゅんすけ"]), ("犬飼アレックスさん", ["犬飼アレックス"]),
+        ("佐久間健一さん", ["佐久間健一"]), ("犬飼さま", ["犬飼"]), ("犬飼先生", ["犬飼"]), ("犬飼氏は", ["犬飼"]),
+        ("住所氏名", []), ("皆さま", []), ("多種多様", []), ("生物多様性", []),
+        // Hiragana names: ending in a particle letter before kanji, at the end of a line after
+        // other text, mixed with kanji, followed by kanji.
+        ("山田まなか来店", ["山田まなか来店"]), ("担当: 山田さくら", ["山田さくら"]), ("10:32 山田さくら", ["山田さくら"]),
+        ("山田ゆう子さん", ["山田ゆう子"]), ("山田 ゆう子", ["山田 ゆう子"]), ("山田 真ゆみ", ["山田 真ゆみ"]),
+        ("山田さくら部長", ["山田さくら部長"]), ("山田りゅうのすけが来た", ["山田りゅうのすけ"]),
         ("山田 からきたよね", ["山田 からきたよね"]),  // spaced hiragana to the line end: taken as a name
         ("山田 は来た", []), ("森の中", []), ("東京都みほん区", []), ("皆さん", []), ("たくさん", []),
         ("仕様です", []),
@@ -70,7 +83,8 @@ public func selfCheck() -> [String] {
         ("電話は 080-0000-", "2222 です", .number), ("090-12", "34-5678", .number),
         ("カード 4111 1111 1111", "1111 で", .number), ("電話 090 12", "34 567", .number),
         ("080 00", "00 2222", .number), ("（090）", "123-45", .number),
-        ("https://example.com/users（", "yamada）", .url),
+        ("https://example.com/users（", "yamada）", .url), ("電話 090  12", "34 5678", .number),
+        ("電話 090　12", "34 5678", .number),
         ("よろしくお願いします", "はい", nil), ("9:41", "5G", nil), ("Wi-Fi", "OK", nil),
     ]
     for (u, l, want) in wraps {
@@ -85,6 +99,9 @@ public func selfCheck() -> [String] {
     let bridged = NSString(characters: Array(line.utf16), length: line.utf16.count) as String
     expect(trailingWord(bridged).map { String(bridged[$0]) } == "https://example.com/users/yamada-hana",
            "trailing word of a bridged Japanese line")
+    for u in ["電話 090  12", "電話 090　12", "電話 090 12"] {
+        expect(trailingWord(u).map { String(u[$0]).filter(\.isNumber) } == "09012", "trailing number with spaces: \(u)")
+    }
     expect(leadingWord("  ple.com です").map { String("  ple.com です"[$0]) } == "ple.com", "leading word")
 
     failures += selfCheckMask()

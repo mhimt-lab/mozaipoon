@@ -4,7 +4,7 @@ import Foundation
 // Japanese (NLTagger's nameType is not available for it), so common family names are looked
 // up and accepted only where a name is likely: followed by an honorific, a given name, or
 // alone on the line (a chat's contact name). Family names not in the list are found only with
-// さん・くん・ちゃん・様 after 2–4 kanji (犬飼さん, 犬飼さくらさん); nicknames are not found, the
+// an honorific after 2–6 kanji (犬飼さん, 犬飼さくらさん, 佐久間健一さん); nicknames are not found, the
 // user adds them as words. Hiding too much is preferred to leaving a name: a katakana word after a family name
 // is taken as the given name (山田コーポレーション too), a name inside a longer kanji word is
 // taken with up to 2 kanji before it (担当山田太郎), a kanji title after a full name is partly
@@ -49,14 +49,20 @@ private let shortFamilyNames: Set<String> = ["森", "原", "林", "東", "関", 
 
 private let honorifics = ["さん", "さま", "様", "くん", "君", "ちゃん", "氏", "先生", "殿", "です", "と申します"]
 private let politeEndings: Set<String> = ["です", "と申します"]
-/// Particles (and first letters of から・より・って・だ・まで・ね・なら) that may end a hiragana
-/// given name written without a space (山田さくらが来た). Names contain them too (はると), so the
-/// last one within a name's length is used: hiding a letter too many is preferred.
-private let particles: Set<Character> = ["が", "は", "を", "に", "へ", "と", "も", "の", "や", "で", "か", "よ", "っ", "だ", "ま", "ね", "な"]
-/// Honorifics after a family name not in the list. Not 氏 (氏名) or one kanji before them
-/// (皆さん, 奥様); 様 not after the kanji of ordinary words (仕様, 同様, 模様, 多様).
-private let looseHonorifics = ["さん", "くん", "ちゃん", "様"]
-private let notBeforeSama: Set<Character> = ["仕", "同", "模", "多", "異", "皆", "客", "神", "奥", "有", "左", "王", "殿"]
+/// Particles that end a hiragana given name written without a space before kanji (山田さくらが
+/// 来た). Only ones no name ends with: か・な・の・と・ね・も end names (まなか, ひなの, はると),
+/// so a name ending in them is hidden with the kanji after it instead (山田まなか来店).
+private let particleEndings = ["から", "まで", "って", "なら", "より", "が", "は", "を", "へ", "で", "だ"]
+/// Honorifics after a family name not in the list. Not one kanji before them (皆さん, 奥様).
+private let looseHonorifics = ["さん", "さま", "くん", "君", "ちゃん", "様", "先生", "氏"]
+/// 様 after the kanji of ordinary words (仕様, 同様, 模様, 異様, 客様; 多様 after 種・物).
+private let notBeforeSama: Set<Character> = ["仕", "同", "模", "異", "客"]
+/// 氏 before these is a word (氏名, 氏族).
+private let notAfterShi: Set<Character> = ["名", "族", "神", "子", "家"]
+/// A kana given name does not start with these (時間がたくさん), nor end with a family word
+/// (田舎のおばあちゃん) or たく (たくさん).
+private let kanaNotFirst: Set<Character> = ["が", "を", "へ", "で", "っ", "ー"]
+private let notKanaNames = ["おばあ", "おじい", "おにい", "おねえ", "おかあ", "おとう", "たく"]
 
 private func isKanji(_ c: Character) -> Bool {
     guard let u = c.unicodeScalars.first, c.unicodeScalars.count == 1 else { return false }
@@ -75,6 +81,8 @@ private func isKatakana(_ c: Character) -> Bool {
     guard let u = c.unicodeScalars.first, c.unicodeScalars.count == 1 else { return false }
     return (0x30A1...0x30FA).contains(u.value) || u.value == 0x30FC
 }
+
+private func isKana(_ c: Character) -> Bool { isHiragana(c) || isKatakana(c) }
 
 /// Not part of a word: a space, punctuation or a bracket (山田 さくら、 / 山田 タロウ（営業）).
 private func endsWord(_ c: Character) -> Bool {
@@ -114,32 +122,38 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
         // a spaced word (山田 さくら), before a particle (山田さくらが), or katakana (山田サクラ).
         var given = 0
         while j + given < chars.count, given < 3, isKanji(chars[j + given]) { given += 1 }
+        if given == 1, j + 1 < chars.count, isHiragana(chars[j + 1]) {
+            // One kanji and kana (山田 真ゆみ): to the end of the word or an honorific.
+            var h = 0
+            while j + 1 + h < chars.count, h < 3, isHiragana(chars[j + 1 + h]), !honorific(at: j + 1 + h, polite: spaced) { h += 1 }
+            let e = j + 1 + h
+            if e == chars.count || endsWord(chars[e]) || honorific(at: e, polite: spaced) { given += h }
+        }
         if given == 0, spaced || !m.short, j < chars.count, isHiragana(chars[j]) || isKatakana(chars[j]) {
             // One script: katakana (サクラ) stops at the hiragana after it (サクラです). Taken
             // whole however long (山田アレクサンダー・ジュニア), not cut where the rest shows.
             let katakana = isKatakana(chars[j])
             let kana: (Character) -> Bool = katakana ? { isKatakana($0) || $0 == "・" } : isHiragana
-            while j + given < chars.count, kana(chars[j + given]), !honorific(at: j + given, polite: spaced) {
+            // Hiragana up to 6 letters (a longer run is a sentence; its first 6 are hidden).
+            while j + given < chars.count, katakana || given < 6, kana(chars[j + given]), !honorific(at: j + given, polite: spaced) {
                 given += 1
             }
             let stop = j + given
-            let ok: Bool
-            if katakana || honorific(at: stop, polite: spaced) {
-                ok = true  // 山田サクラ(です・が・宛), 山田さくらさん, 山田 さくらこです
-            } else if stop == chars.count || endsWord(chars[stop]) {
-                // 山田 さくら, 山田さくら、, and a line that is just 山田さくら (a contact name)
-                ok = spaced || stop < chars.count || String(chars[i..<stop]) == trimmed
-            } else {
-                ok = false
+            if katakana {
+                // 山田サクラ(です・が・宛)
+            } else if honorific(at: stop, polite: spaced) || stop == chars.count || endsWord(chars[stop]) {
+                // 山田さくらさん, 山田 さくら, 山田さくら、, 担当: 山田さくら
+                if !spaced, given >= 4, String(chars[(stop - 2)..<stop]) == "です" { given -= 2 }  // 山田ひなのです。
+            } else if let e = particleEndings.first(where: { String(chars[j..<stop]).hasSuffix($0) && given - $0.count >= 2 }) {
+                given -= e.count  // 山田さくらが来た, 山田はるとが来た, 山田さくらから聞いた
+            } else if (2...3).contains(given), isKanji(chars[stop]) {
+                // Kana and kanji (山田ゆう子さん), or a name ending like a particle before kanji
+                // (山田まなか来店) or a title (山田さくら部長): with up to 2 kanji after it.
+                var k = 0
+                while stop + k < chars.count, k < 2, isKanji(chars[stop + k]), !honorific(at: stop + k, polite: false) { k += 1 }
+                given += k
             }
-            if ok, !katakana, !spaced, given >= 4, String(chars[(stop - 2)..<stop]) == "です" {
-                given -= 2  // 山田ひなのです。
-            }
-            if !ok, let p = (2...min(5, max(2, given - 1))).last(where: { given > $0 && particles.contains(chars[j + $0]) }) {
-                given = p  // 山田さくらが来た, 山田はるとが来た: up to the last particle
-            } else if given < 2 || !ok {
-                given = 0
-            }
+            if given < 2 { given = 0 }
         }
         var upper: Int?
         if honorific(at: j, polite: !inWord) {
@@ -162,26 +176,33 @@ func nameRanges(in s: String) -> [Range<String.Index>] {
             i += 1
         }
     }
-    // Family names not in the list: 2–4 kanji before さん・くん・ちゃん・様 (犬飼さん), with a
-    // kana given name (犬飼さくらさん) or a spaced one (犬飼 太郎さん) between, and a space read
-    // before the honorific (犬飼 さん). A kana name does not start with a particle (時間がたく
-    // さん, 田舎のおばあちゃん).
+    // Family names not in the list: 2–6 kanji before an honorific (犬飼さん, 佐久間健一さん),
+    // with a kana given name (犬飼さくらさん) or a spaced one (犬飼 太郎さん, 犬飼 蓮さん)
+    // between, and a space read before the honorific (犬飼 さん).
     for k in chars.indices {
         guard let h = looseHonorifics.first(where: { String(chars[k...]).hasPrefix($0) }) else { continue }
+        if h == "様", k > 0, notBeforeSama.contains(chars[k - 1]) || chars[k - 1] == "多" && k > 1 && "種物".contains(chars[k - 2]) { continue }
+        if h == "氏", k + 1 < chars.count, notAfterShi.contains(chars[k + 1]) { continue }
         func skipSpace(_ p: Int) -> Int { p > 0 && chars[p - 1].isWhitespace ? p - 1 : p }
-        func kanjiRun(_ p: Int) -> Int { var q = p; while q > 0, p - q < 4, isKanji(chars[q - 1]) { q -= 1 }; return q }
+        func kanjiRun(_ p: Int, _ limit: Int) -> Int { var q = p; while q > 0, p - q < limit, isKanji(chars[q - 1]) { q -= 1 }; return q }
         let end = skipSpace(k)
         var p = end
         var kana = p
-        while kana > 0, p - kana < 4, isHiragana(chars[kana - 1]) || isKatakana(chars[kana - 1]) { kana -= 1 }
-        if p - kana >= 2, !particles.contains(chars[kana]), kana == 0 || !(isHiragana(chars[kana - 1]) || isKatakana(chars[kana - 1])) {
+        while kana > 0, p - kana < 6, isKana(chars[kana - 1]) { kana -= 1 }
+        let word = String(chars[kana..<p])
+        if p - kana >= 2, !kanaNotFirst.contains(chars[kana]), kana == 0 || !isKana(chars[kana - 1]),
+           !notKanaNames.contains(where: word.hasSuffix) {
             p = skipSpace(kana)
         }
-        var start = kanjiRun(p)
-        guard p - start >= 2, h != "様" || !notBeforeSama.contains(chars[k - 1]) else { continue }
-        // 犬飼 太郎さん: the family name before a space.
+        var start = kanjiRun(p, 6)
+        // 犬飼 太郎さん, 犬飼 蓮さん: the family name before a space.
         let before = skipSpace(start)
-        if before < start, kanjiRun(before) < before { start = kanjiRun(before) }
+        let family = before < start ? kanjiRun(before, 4) : before
+        if p - start >= 1, before - family >= (p - start >= 2 ? 1 : 2) {
+            start = family
+        } else if p - start < 2 {
+            continue
+        }
         let r = idx[start]..<idx[end]
         if let o = out.firstIndex(where: { $0.overlaps(r) }) {
             out[o] = min(out[o].lowerBound, r.lowerBound)..<max(out[o].upperBound, r.upperBound)  // 勅使河原さん
