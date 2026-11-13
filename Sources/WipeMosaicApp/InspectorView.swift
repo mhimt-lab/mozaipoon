@@ -29,6 +29,7 @@ struct InspectorView: View {
         .fileImporter(isPresented: $model.importingSticker, allowedContentTypes: [.image]) { result in
             if case .success(let url) = result { model.addSticker(from: url) } else { model.stickerTarget = nil }
         }
+        .stickerRemovalDialog(model: model, item: $model.stickerToRemoveFromMenu)
     }
 
     private var peopleList: some View {
@@ -639,6 +640,21 @@ private struct CoverMenu: View {
             .labelsHidden()
             Divider()
             Button("画像を選んでスタンプにする…") { model.chooseStickerImage(for: person) }
+            if !model.stickerLibrary.isEmpty {
+                Menu("スタンプを削除") {
+                    ForEach(Array(model.stickerLibrary.enumerated()), id: \.element.id) { i, item in
+                        Button {
+                            model.stickerToRemoveFromMenu = item
+                        } label: {
+                            Label {
+                                Text("スタンプ \(i + 1)…")
+                            } icon: {
+                                Image(nsImage: menuImage(item.sticker.cgImage))
+                            }
+                        }
+                    }
+                }
+            }
         } label: {
             HStack(spacing: 6) {
                 if let current {

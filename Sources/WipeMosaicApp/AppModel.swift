@@ -92,6 +92,8 @@ final class AppModel {
     /// The image waiting for the delete confirmation in Settings (in the model: @State
     /// needs the SwiftUI macro plugin, see WipeMosaicApp).
     var stickerToRemove: StickerItem?
+    /// The same, asked from a person's "隠し方" menu in the main window.
+    var stickerToRemoveFromMenu: StickerItem?
     /// Deleted while the library was still loading: the load read them before.
     private var removedStickers: Set<UUID> = []
     /// The person waiting for an image from the file dialog.

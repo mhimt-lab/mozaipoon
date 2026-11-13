@@ -173,22 +173,31 @@ private struct StickerSettings: View {
             } header: {
                 Text("顔に重ねる画像")
             } footer: {
-                Text("使っていた人は、基本の隠し方（モザイクかぼかし）に戻ります。削除は取り消せません。画像はこのMacの中だけに保存され、どこにも送信されません。")
+                Text(model.stickerLibrary.isEmpty
+                     ? "画像はこのMacの中だけに保存され、どこにも送信されません。"
+                     : "削除すると、使っていた人は基本の隠し方（モザイクかぼかし）に戻ります。削除は取り消せません。右の一覧の「隠し方」メニューの「スタンプを削除」からも削除できます。画像はこのMacの中だけに保存され、どこにも送信されません。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .frame(height: 300)
-        .confirmationDialog(
+        .stickerRemovalDialog(model: model, item: $model.stickerToRemove)
+    }
+}
+
+extension View {
+    /// Asks before deleting a sticker (it cannot be undone, and every video using it loses it).
+    func stickerRemovalDialog(model: AppModel, item: Binding<StickerItem?>) -> some View {
+        confirmationDialog(
             "このスタンプを削除しますか？",
-            isPresented: Binding(get: { model.stickerToRemove != nil }, set: { if !$0 { model.stickerToRemove = nil } }),
-            presenting: model.stickerToRemove
-        ) { item in
-            Button("削除", role: .destructive) { model.removeSticker(item) }
+            isPresented: Binding(get: { item.wrappedValue != nil }, set: { if !$0 { item.wrappedValue = nil } }),
+            presenting: item.wrappedValue
+        ) { s in
+            Button("削除", role: .destructive) { model.removeSticker(s) }
             Button("キャンセル", role: .cancel) {}
-        } message: { item in
-            let users = model.videos.filter { $0.stickers.values.contains(item.id) }.count
+        } message: { s in
+            let users = model.videos.filter { $0.stickers.values.contains(s.id) }.count
             Text(users > 0
                  ? "\(users)本の動画で使っています。使っていた人は、基本の隠し方（モザイクかぼかし）に戻ります。削除は取り消せません。"
                  : "削除は取り消せません。")
