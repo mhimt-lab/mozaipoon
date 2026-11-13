@@ -143,9 +143,13 @@ public struct VideoFaces: Sendable {
             // The other box (a held position next to the face, or two held positions of one
             // person far apart) stays mosaicked as it is rather than being merged into a box
             // that would cover both.
-            let (win, lose) = rank < cur.rank ? ((r, rank), cur.rect) : (cur, r)
+            // Spelled out: the Xcode 26.6 compiler (release CI) crashes on the equivalent ternary
+            // whose branches are tuples with and without labels.
+            let win: (rect: CGRect, rank: Int)
+            let lose: CGRect
+            if rank < cur.rank { win = (r, rank); lose = cur.rect } else { win = cur; lose = r }
             best[person]![f] = win
-            if !win.0.contains(lose) { mosaic[f].append(lose) }
+            if !win.rect.contains(lose) { mosaic[f].append(lose) }
         }
         var selectedTracks: [Int: [FaceTrack]] = [:]
         for t in tracks {
