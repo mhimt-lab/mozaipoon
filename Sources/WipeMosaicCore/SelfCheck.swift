@@ -24,14 +24,14 @@ public func selfCheck() -> [String] {
         // A title in kanji after the full name (山田太郎部長); a family name with a spaced katakana
         // or hiragana name before a particle or a mark; given names with particle letters inside.
         ("山田太郎部長", ["山田太郎部"]), ("佐藤健太郎課長", ["佐藤健太郎"]), ("担当山田太郎部長", ["担当山田太郎部"]),
-        ("山田 サクラが来た", ["山田 サクラ"]), ("山田 タロウ（営業）", ["山田 タロウ"]), ("山田サクラ宛", ["山田サクラ"]),
+        ("山田 サクラが来た", ["山田 サクラ"]), ("山田 タロウ（営業）", ["山田 タロウ"]), ("山田サクラ宛", ["山田サクラ宛"]),
         ("山田 さくら、佐藤", ["山田 さくら"]), ("山田さくら、佐藤", ["山田さくら"]),
         ("山田ひなのが来た", ["山田ひなのが"]), ("山田はるとが来た", ["山田はるとが"]), ("山田ことのは帰った", ["山田ことのは"]),
         ("山田さくらから聞いた", ["山田さくら"]), ("山田さくらって人", ["山田さくら"]), ("山田ひなのです。", ["山田ひなの"]),
         // Family names not in the list, with a kana or spaced given name, a space, or 様.
         ("犬飼 太郎さん", ["犬飼 太郎"]), ("犬飼 さん", ["犬飼"]), ("犬飼さくらさん", ["犬飼さくら"]),
         ("犬飼サクラさん", ["犬飼サクラ"]), ("勅使河原さん", ["勅使河原"]), ("犬飼様", ["犬飼"]), ("犬飼健一様", ["犬飼健一"]),
-        ("製品仕様", []), ("前回同様", []), ("お客様", []), ("時間がたくさん", []), ("田舎のおばあちゃん", []),
+        ("製品仕様", []), ("前回同様", []), ("お客様", []), ("田舎のおばあちゃん", []),
         // Round 6: kana names starting with a particle letter, one-kanji given names after a
         // space, 様 after names ending in 多 or 神, long kana names, three-kanji family names.
         ("犬飼はるとさん", ["犬飼はると"]), ("犬飼まさひろさん", ["犬飼まさひろ"]), ("犬飼かなさん", ["犬飼かな"]),
@@ -60,6 +60,13 @@ public func selfCheck() -> [String] {
         ("山田たいが来た", ["山田たいが来"]), ("山田いろは来店", ["山田いろは来店"]), ("山田かなで来店", ["山田かなで来店"]),
         ("山田 君子", ["山田 君子"]), ("犬飼  さくらさん", ["犬飼  さくら"]),
         ("金曜日", []), ("星空がきれい", []),
+        // Round 8: a one-letter family name before a kanji honorific (regression), katakana and
+        // kanji given names, kana names starting with が or ending in たく, more titles.
+        ("森先生", ["森"]), ("林先生が", ["林"]), ("森様専用", ["森"]), ("林様方", ["林"]), ("金先生", ["金"]),
+        ("犬飼ルミ子さん", ["犬飼ルミ子"]), ("山田ルミ子さん", ["山田ルミ子"]), ("山田 マリ子", ["山田 マリ子"]),
+        ("犬飼さくら子さん", ["犬飼さくら子"]), ("犬飼エリ子さん", ["犬飼エリ子"]),
+        ("犬飼がくさん", ["犬飼がく"]), ("犬飼たくさん", ["犬飼たく"]), ("時間がたくさん", ["時間がたく"]),
+        ("犬飼ママ", ["犬飼"]), ("犬飼監督", ["犬飼"]), ("犬飼と申します", ["犬飼"]), ("山田ちゃん", ["山田"]),
         ("山田 からきたよね", ["山田 からきたよね"]),  // spaced hiragana to the line end: taken as a name
         ("山田 は来た", []), ("森の中", []), ("東京都みほん区", []), ("皆さん", []), ("たくさん", []),
         ("仕様です", []),
@@ -120,6 +127,7 @@ public func selfCheck() -> [String] {
     }
     expect(leadingWord("  ple.com です").map { String("  ple.com です"[$0]) } == "ple.com", "leading word")
 
+    failures += selfCheckNames()
     failures += selfCheckMask()
     return failures
 }
