@@ -185,11 +185,15 @@ struct InspectorView: View {
                     .buttonStyle(.borderedProminent)
                 SettingsLink { Text("設定を開く…") }
             }
+        } else if video.purpose == nil, video.state == .idle {
+            ContentUnavailableView("隠すものを選んでください", systemImage: "questionmark.circle")
         } else if video.analysis == nil, video.analyzing == nil, video.isReady, video.job == .idle {
             ContentUnavailableView {
                 Label("顔を探していません", systemImage: "person.crop.circle.badge.xmark")
             } description: {
-                Text("探すのを中止しました。")
+                Text(video.state == .idle
+                     ? "この動画は「画面の文字」を隠す動画として追加しました。人の顔も隠すときは、顔を探してください。"
+                     : "探すのを中止しました。")
             } actions: {
                 Button("顔を探す") { model.reanalyze() }
                     .buttonStyle(.borderedProminent)

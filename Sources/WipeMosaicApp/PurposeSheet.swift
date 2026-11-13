@@ -1,0 +1,98 @@
+import SwiftUI
+
+extension Purpose {
+    var title: String {
+        switch self {
+        case .faces: "人の顔"
+        case .text: "画面の文字"
+        case .both: "両方"
+        }
+    }
+    var detail: String {
+        switch self {
+        case .faces: "映っている人を探して、選んだ人の顔を隠します。"
+        case .text: "画面録画や、スマホなどの画面を撮った動画に映る電話番号・名前などを隠します。"
+        case .both: "顔と画面の文字の両方を探します。それぞれ順番に処理するので、時間がかかります。"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .faces: "person.2.crop.square.stack"
+        case .text: "text.viewfinder"
+        case .both: "square.stack.3d.up"
+        }
+    }
+}
+
+/// Asked when videos are added: nothing is searched until the user says what to hide, so a
+/// screen recording does not wait for a face search first.
+struct PurposeSheet: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        let count = model.pendingPurpose.count
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("何を隠しますか？").font(.title2.bold())
+                Text(count > 1
+                     ? "追加した\(count)本の動画に使います。あとから右の一覧で、もう一方を探すこともできます。"
+                     : "あとから右の一覧で、もう一方を探すこともできます。")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(Purpose.allCases, id: \.self) { p in
+                option(p)
+            }
+            HStack {
+                Text("Return キーで「\(model.lastPurpose.title)」を選びます")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("追加しない", role: .cancel) { model.cancelPurpose() }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+    }
+
+    private func option(_ p: Purpose) -> some View {
+        let isDefault = p == model.lastPurpose
+        return Button {
+            model.choosePurpose(p)
+        } label: {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: p.symbol)
+                    .font(.title2)
+                    .frame(width: 32)
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(p.title).font(.headline)
+                    Text(p.detail)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(isDefault ? 0.9 : 0.4), in: .rect(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(isDefault ? Color.accentColor : .clear, lineWidth: 2)
+            }
+            .contentShape(.rect(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .modifier(DefaultKey(isOn: isDefault))
+        .accessibilityHint(p.detail)
+    }
+}
+
+private struct DefaultKey: ViewModifier {
+    let isOn: Bool
+    func body(content: Content) -> some View {
+        if isOn { content.keyboardShortcut(.defaultAction) } else { content }
+    }
+}

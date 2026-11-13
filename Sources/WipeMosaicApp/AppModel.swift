@@ -97,10 +97,20 @@ final class AppModel {
     // MARK: Videos
     var videos: [VideoItem] = []
     var currentID: UUID? {
-        didSet { if oldValue != currentID { showCurrent(previous: oldValue) } }
+        didSet {
+            guard oldValue != currentID else { return }
+            followPurpose()
+            showCurrent(previous: oldValue)
+        }
     }
     var current: VideoItem? { videos.first { $0.id == currentID } }
     var importingVideo = false
+    /// Videos just added, waiting for the user to choose what to hide in them.
+    var pendingPurpose: [UUID] = []
+    /// The last choice, offered first next time.
+    var lastPurpose: Purpose = Purpose(rawValue: UserDefaults.standard.string(forKey: "purpose") ?? "") ?? .faces {
+        didSet { UserDefaults.standard.set(lastPurpose.rawValue, forKey: "purpose") }
+    }
     var dropTargeted = false
     var alert: AppAlert?
     /// A video waiting for the user to confirm removing it with unexported work.
@@ -272,6 +282,7 @@ final class AppModel {
             }
             let v = VideoItem(url: url)
             videos.append(v)
+            pendingPurpose.append(v.id)
             if firstNew == nil { firstNew = v.id }
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
             load(v)
@@ -304,13 +315,52 @@ final class AppModel {
                 v.info = i
                 v.sourceItem = item
                 v.composition = comp
-                v.state = .waiting
+                v.state = .idle
                 if v.id == currentID { showCurrent(previous: nil) }
-                processQueue()
+                startChosen(v)
                 v.poster = await Self.poster(v.asset, duration: i.duration)
             } catch {
                 v.state = .failed(Self.describe(error))
             }
+        }
+    }
+
+    /// Apply the choice to the videos just added and start what was chosen.
+    func choosePurpose(_ p: Purpose) {
+        lastPurpose = p
+        let ids = pendingPurpose
+        pendingPurpose = []
+        for v in videos where ids.contains(v.id) {
+            v.purpose = p
+            startChosen(v)
+        }
+        followPurpose()
+    }
+
+    /// Do not add the videos after all.
+    func cancelPurpose() {
+        let ids = pendingPurpose
+        pendingPurpose = []
+        for id in ids { remove(id) }
+    }
+
+    /// Start the searches the user chose, once the video is loaded and the choice is made.
+    private func startChosen(_ v: VideoItem) {
+        guard v.isReady, let p = v.purpose else { return }
+        if p.findsFaces, v.state == .idle {
+            v.state = .waiting
+            processQueue()
+        }
+        if p.readsText, v.textState == nil { scanText(v) }
+    }
+
+    /// Show the tab of what the current video is for (one purpose only). Otherwise the text
+    /// tab, which starts reading when shown, would read a video added for faces.
+    private func followPurpose() {
+        switch current?.purpose {
+        case .faces: inspectorTab = .people
+        case .text: inspectorTab = .text
+        case .both, nil: break
         }
     }
 
@@ -333,6 +383,7 @@ final class AppModel {
         if analyzingID == id { analysisTask?.cancel() }
         if textScanningID == id { textTask?.cancel() }
         let v = videos.remove(at: idx)
+        pendingPurpose.removeAll { $0 == id }
         v.close()
         if currentID == id {
             currentID = videos.isEmpty ? nil : videos[min(idx, videos.count - 1)].id
@@ -433,6 +484,7 @@ final class AppModel {
     /// Search the current video again (with the current accuracy). Its choices are reset.
     func reanalyze() {
         guard let v = current, v.isReady, v.analyzing == nil, !v.job.isActive else { return }
+        if v.purpose == .text { v.purpose = .both }  // faces asked for later
         v.analysis = nil
         v.thumbnails = [:]
         v.scenes = [:]
@@ -534,6 +586,7 @@ final class AppModel {
     /// Read the text on screen in `v` (queued if another video is being read).
     func scanText(_ v: VideoItem) {
         guard v.isReady, v.textScanning == nil, v.textState != .waiting else { return }
+        if v.purpose == .faces { v.purpose = .both }  // text asked for later
         v.text = nil
         v.textMask = nil
         v.textOptions = nil

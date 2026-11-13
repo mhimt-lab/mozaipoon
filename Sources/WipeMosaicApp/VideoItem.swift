@@ -4,7 +4,15 @@ import Observation
 import WipeMosaicCore
 
 enum AnalysisState: Equatable {
-    case loading, converting, waiting, running(Double), done, cancelled, failed(String)
+    /// `idle`: loaded, but searching faces was not asked for (only text was chosen).
+    case loading, converting, idle, waiting, running(Double), done, cancelled, failed(String)
+}
+
+/// What the user wants to hide in a video, chosen when it is added.
+enum Purpose: String, CaseIterable {
+    case faces, text, both
+    var findsFaces: Bool { self != .text }
+    var readsText: Bool { self != .faces }
 }
 
 enum JobState: Equatable {
@@ -81,6 +89,8 @@ final class VideoItem: Identifiable {
     var text: ScreenText?
     /// Lines hidden whole (entry ids).
     var textLines: Set<Int> = []
+    /// nil until the user chose what to hide; nothing is searched before that.
+    var purpose: Purpose?
     /// Hide every line that was read (a device screen filmed with a camera).
     var textAll = false
     /// Boxes for the current text options (kinds and words are app-wide, lines per video).

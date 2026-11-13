@@ -10,6 +10,8 @@ public enum TextKind: String, CaseIterable, Sendable, Identifiable {
     case url
     /// Postal codes and Japanese addresses.
     case address
+    /// Japanese person names with a common family name (see Names.swift).
+    case name
     public var id: String { rawValue }
 }
 
@@ -479,6 +481,7 @@ func findKinds(in s: String) -> [(TextKind, Range<String.Index>)] {
             out.append((kind, kind == .address ? r.lowerBound..<s.endIndex : r))
         }
     }
+    out += nameRanges(in: s).map { (.name, $0) }
     return out
 }
 

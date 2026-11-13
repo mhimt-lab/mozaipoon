@@ -110,6 +110,8 @@ private struct VideoRow: View {
             StatusLabel("読み込み中…", systemImage: "film")
         case .converting:
             StatusLabel("再生できる形式に変換中…", systemImage: "arrow.triangle.2.circlepath")
+        case .idle:
+            textStatus
         case .waiting:
             StatusLabel("順番待ち", systemImage: "clock")
         case .running(let p):
@@ -121,17 +123,49 @@ private struct VideoRow: View {
         case .done:
             if let a = video.analysis {
                 if video.hasChoices {
-                    if video.job == .done, !video.resultIsStale(model.mosaicParams) {
-                        StatusLabel("書き出し済み", systemImage: "checkmark.circle.fill", tint: .green)
-                    } else {
-                        StatusLabel(video.choiceSummary, systemImage: "eye.slash")
-                    }
+                    choiceStatus
                 } else if a.people.isEmpty {
                     StatusLabel("顔が見つかりません", systemImage: "person.crop.circle.badge.questionmark")
                 } else {
                     StatusLabel("\(a.people.count)人中 0人にモザイク", systemImage: "circle.dashed")
                 }
             }
+        }
+    }
+
+    /// A video not searched for faces (only text was chosen, or nothing chosen yet).
+    @ViewBuilder
+    private var textStatus: some View {
+        switch video.textState {
+        case nil:
+            if video.purpose == nil {
+                StatusLabel("隠すものを選んでください", systemImage: "questionmark.circle")
+            } else {
+                StatusLabel("顔を探していません", systemImage: "pause.circle")
+            }
+        case .waiting:
+            StatusLabel("順番待ち", systemImage: "clock")
+        case .running(let p):
+            progress("文字を読み取っています", p)
+        case .cancelled:
+            StatusLabel("文字を読み取っていません", systemImage: "pause.circle")
+        case .failed:
+            StatusLabel("文字を読み取れませんでした", systemImage: "exclamationmark.triangle.fill", tint: .red, emphasized: true)
+        case .done, .loading, .converting, .idle:
+            if video.hasChoices {
+                choiceStatus
+            } else {
+                StatusLabel("隠す文字はありません", systemImage: "circle.dashed")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var choiceStatus: some View {
+        if video.job == .done, !video.resultIsStale(model.mosaicParams) {
+            StatusLabel("書き出し済み", systemImage: "checkmark.circle.fill", tint: .green)
+        } else {
+            StatusLabel(video.choiceSummary, systemImage: "eye.slash")
         }
     }
 

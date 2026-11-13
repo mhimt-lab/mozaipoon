@@ -8,6 +8,7 @@ extension TextKind {
         case .email: "メールアドレス"
         case .url: "URL"
         case .address: "住所・郵便番号"
+        case .name: "人の名前"
         }
     }
     var note: String {
@@ -16,6 +17,7 @@ extension TextKind {
         case .email: "〜@〜.〜 の形の文字"
         case .url: "https:// や www. で始まる文字、.com・.jp などで終わる文字"
         case .address: "〒や「〜県〜市」「〜区〜1-2-3」の形の文字。見つかった所から行の終わりまでと、すぐ下に続く行も隠します"
+        case .name: "よくある名字に、名前や「さん」などが続く文字（「山田 花子」「田中さん」）。見つからない名前は、下の「隠す言葉」に入れてください"
         }
     }
     var shortLabel: String {
@@ -24,6 +26,7 @@ extension TextKind {
         case .email: "メール"
         case .url: "URL"
         case .address: "住所"
+        case .name: "名前"
         }
     }
 }
@@ -235,7 +238,7 @@ struct TextInspectorView: View {
                 Button("もう一度読み取る") { model.scanText(video) }
                     .buttonStyle(.borderedProminent)
             }
-        case .loading, .converting, .done:
+        case .loading, .converting, .idle, .done:
             EmptyView()
         }
     }

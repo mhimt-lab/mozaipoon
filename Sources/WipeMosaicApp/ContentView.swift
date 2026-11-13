@@ -33,6 +33,13 @@ struct ContentView: View {
             .sheet(isPresented: $model.showingExportSheet) {
                 ExportSheet(model: model)
             }
+            .sheet(isPresented: Binding(
+                get: { !model.pendingPurpose.isEmpty && !model.showingExportSheet },
+                set: { if !$0 && !model.pendingPurpose.isEmpty { model.cancelPurpose() } }
+            )) {
+                PurposeSheet(model: model)
+                    .interactiveDismissDisabled()
+            }
             .buttonBorderShape(.capsule)
             .onAppear { model.undoManager = undoManager }
             .onChange(of: undoManager) { _, um in model.undoManager = um }
