@@ -20,6 +20,17 @@ func runMosaic(_ o: RunOptions) async throws {
         throw ToolError("output exists (use --overwrite): \(o.output.path)")
     }
 
+    var stickers: [Int: Sticker] = [:]
+    for (person, url) in o.common.stickerFiles.sorted(by: { $0.key < $1.key }) {
+        guard fm.fileExists(atPath: url.path) else { throw ToolError("sticker image not found: \(url.path)") }
+        let s = try Sticker(contentsOf: url)
+        stickers[person] = s
+        let cover = s.coverage(scale: o.common.render.stickerScale)
+        print(String(format: "sticker for person %d: %@, covers %.0f%% of the face", person,
+                     s.anchoredOnFace ? "laid face on face" : "no face in the image, opaque part laid on the face", cover * 100))
+        if cover < 0.98 { print("  warning: part of the face may show around this image; raise --sticker-scale") }
+    }
+
     let asset = AVURLAsset(url: o.common.input)
     let info = try await loadVideo(asset)
     print("video: \(Int(info.size.width))x\(Int(info.size.height))")
@@ -52,7 +63,7 @@ func runMosaic(_ o: RunOptions) async throws {
             progress: report)
         let missing = o.common.people.subtracting(v.people.map(\.id))
         guard missing.isEmpty else { throw ToolError("no such person: \(missing.sorted()) (found \(v.people.count))") }
-        frames = v.frames(selected: o.common.people, endHold: o.common.render.hold)
+        frames = v.frames(selected: o.common.people, endHold: o.common.render.hold, stickered: Set(stickers.keys))
         extra = "  people mosaicked:             \(o.common.people.sorted()) of \(v.people.count)\n"
     }
     if o.common.screenText {
@@ -70,6 +81,7 @@ func runMosaic(_ o: RunOptions) async throws {
     if fm.fileExists(atPath: o.output.path) { try fm.removeItem(at: o.output) }  // --overwrite checked above
     let showProgress = o.progress
     var writeRender = o.common.render
+    writeRender.stickers = stickers
     if !o.common.people.isEmpty { writeRender.hold = 0 }  // already applied per person by frames()
     let format: OutputFormat
     do {
@@ -85,12 +97,15 @@ func runMosaic(_ o: RunOptions) async throws {
 
     if let report = o.report {
         // mosaic_boxes: x:y:w:h in video pixels, top-left origin, before --pad.
-        var csv = "time_sec,mosaic_faces,other_faces,mosaic_boxes,text_boxes\n"
+        // sticker_boxes: person:x:y:w:h, same coordinates (the face box the image covers).
+        var csv = "time_sec,mosaic_faces,other_faces,mosaic_boxes,text_boxes,sticker_boxes\n"
         let h = info.size.height
         for f in frames {
             let boxes = f.mosaic.map { String(format: "%.0f:%.0f:%.0f:%.0f", $0.minX, h - $0.maxY, $0.width, $0.height) }
             csv += String(format: "%.3f,%d,%d,", f.time, f.mosaic.count, f.kept.count) + boxes.joined(separator: " ")
-                + ",\(f.exact.count)\n"
+                + ",\(f.exact.count),"
+                + f.stickers.map { String(format: "%d:%.0f:%.0f:%.0f:%.0f", $0.person, $0.rect.minX, h - $0.rect.maxY, $0.rect.width, $0.rect.height) }
+                .joined(separator: " ") + "\n"
         }
         try csv.write(to: report, atomically: true, encoding: .utf8)
         print("report: \(report.path)")
@@ -102,6 +117,7 @@ func runMosaic(_ o: RunOptions) async throws {
           output format:                \(format)
           frames scanned:               \(frames.count)
           frames with mosaicked faces:  \(frames.filter { !$0.mosaic.isEmpty }.count) (max \(frames.map(\.mosaic.count).max() ?? 0) per frame)
+          frames with sticker faces:    \(frames.filter { !$0.stickers.isEmpty }.count)
           frames with other faces:      \(frames.filter { !$0.kept.isEmpty }.count)
           frames with hidden text:      \(frames.filter { !$0.exact.isEmpty }.count)
         \(extra)  possible misses (count dips): \(dips.count)\(dips.prefix(10).map { String(format: " %.2fs", $0.start) }.joined())

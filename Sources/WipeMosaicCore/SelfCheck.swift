@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 // Regression checks for the rules that find personal information, run by
@@ -135,5 +136,56 @@ public func selfCheck() -> [String] {
 
     failures += selfCheckNames()
     failures += selfCheckMask()
+    failures += selfCheckCover()
+    return failures
+}
+
+/// Stickers: the steadied box never uncovers the face, and the coverage check sees holes.
+func selfCheckCover() -> [String] {
+    var failures: [String] = []
+    func expect(_ ok: Bool, _ what: @autoclosure () -> String) { if !ok { failures.append(what()) } }
+
+    // Jittering boxes with a gap: each steadied box contains its own box; gaps stay empty.
+    var boxes: [CGRect?] = []
+    for i in 0..<30 {
+        let wobble: Double = i % 2 == 0 ? 6 : -6
+        let lift: Double = i % 3 == 0 ? 4 : 0
+        let x = 100 + Double(i * 3) + wobble
+        boxes.append(CGRect(x: x, y: 50 + lift, width: 80 + wobble * 1.5, height: 80))
+    }
+    boxes[10] = nil
+    let steady = steadyBoxes(boxes, centreFrames: 6, sizeFrames: 12, marginFrames: 6)
+    for (i, (b, st)) in zip(boxes, steady).enumerated() {
+        if let b { expect(st.map { $0.contains(b) } == true, "steady box \(i) contains the face") } else {
+            expect(st == nil, "steady box \(i) stays empty in a gap")
+        }
+    }
+    let raw = boxes.compactMap { $0 }.map(\.width), smooth = steady.compactMap { $0 }.map(\.width)
+    func jitter(_ v: [CGFloat]) -> CGFloat { zip(v, v.dropFirst()).map { abs($0 - $1) }.reduce(0, +) }
+    expect(jitter(smooth) < jitter(raw), "steadied sizes jitter less")
+
+    // Coverage: a solid disc covers the face; a ring (a hole in the middle) does not.
+    func image(_ draw: (CGContext) -> Void) -> CGImage? {
+        guard let c = CGContext(data: nil, width: 200, height: 200, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        c.setFillColor(CGColor(red: 1, green: 0.8, blue: 0.2, alpha: 1))
+        draw(c)
+        return c.makeImage()
+    }
+    let disc = image { $0.fillEllipse(in: CGRect(x: 10, y: 10, width: 180, height: 180)) }
+    let ring = image {
+        $0.addEllipse(in: CGRect(x: 10, y: 10, width: 180, height: 180))
+        $0.addEllipse(in: CGRect(x: 60, y: 60, width: 80, height: 80))
+        $0.fillPath(using: .evenOdd)
+    }
+    if let disc, let s = try? Sticker(cgImage: disc) {
+        expect(s.coverage(scale: 1.0) > 0.99, "disc covers the face: \(s.coverage(scale: 1.0))")
+    } else { failures.append("disc sticker could not be made") }
+    if let ring, let s = try? Sticker(cgImage: ring) {
+        expect(s.coverage(scale: 1.2) < 0.9, "ring leaves the face visible: \(s.coverage(scale: 1.2))")
+    } else { failures.append("ring sticker could not be made") }
+    let clear = image { _ in }
+    expect(clear.map { (try? Sticker(cgImage: $0)) == nil } == true, "fully transparent image is refused")
     return failures
 }

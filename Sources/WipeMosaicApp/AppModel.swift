@@ -71,6 +71,26 @@ final class AppModel {
             refreshLive()
         }
     }
+    /// Mosaic or blur, for faces without a sticker and for on-screen text (all videos).
+    var coverStyle: CoverStyle = CoverStyle(rawValue: UserDefaults.standard.string(forKey: Keys.coverStyle) ?? "") ?? .mosaic {
+        didSet {
+            UserDefaults.standard.set(coverStyle.rawValue, forKey: Keys.coverStyle)
+            refreshLive()
+        }
+    }
+    /// Sticker size relative to the face.
+    var stickerScale: Double = AppModel.stored(Keys.stickerScale, 1.2) {
+        didSet {
+            UserDefaults.standard.set(stickerScale, forKey: Keys.stickerScale)
+            refreshLive()
+        }
+    }
+
+    // MARK: Stickers (images put over a person's face)
+    var stickerLibrary: [StickerItem] = StickerStore.loadAll()
+    /// The person waiting for an image from the file dialog.
+    var stickerTarget: Int?
+    var importingSticker = false
 
     /// Kinds of personal information hidden automatically in on-screen text (all videos).
     var textKinds: Set<TextKind> = AppModel.storedKinds() {
@@ -153,6 +173,7 @@ final class AppModel {
 
     private enum Keys {
         static let accuracy = "accuracy", hold = "hold", pad = "pad", autoBlock = "autoBlock", block = "block"
+        static let coverStyle = "coverStyle", stickerScale = "stickerScale"
         static let textKinds = "textKinds", textWords = "textWords"
     }
 
@@ -192,10 +213,25 @@ final class AppModel {
         r.hold = 0  // applied per person by VideoFaces.frames(selected:endHold:)
         r.pad = pad
         r.block = autoBlock ? nil : block
+        r.style = coverStyle
+        r.stickerScale = stickerScale
+        for (person, id) in activeStickers(v) {
+            if let item = stickerLibrary.first(where: { $0.id == id }) { r.stickers[person] = item.sticker }
+        }
         return r
     }
 
-    var mosaicParams: MosaicParams { MosaicParams(hold: hold, pad: pad, block: autoBlock ? nil : block) }
+    /// Chosen people with a sticker that is still in the library: person → sticker id.
+    func activeStickers(_ v: VideoItem) -> [Int: UUID] {
+        let ids = Set(stickerLibrary.map(\.id))
+        return v.stickers.filter { v.selected.contains($0.key) && ids.contains($0.value) }
+    }
+
+    func sticker(_ id: UUID?) -> StickerItem? { id.flatMap { id in stickerLibrary.first { $0.id == id } } }
+
+    var mosaicParams: MosaicParams {
+        MosaicParams(hold: hold, pad: pad, block: autoBlock ? nil : block, style: coverStyle, stickerScale: stickerScale)
+    }
     var hasVideo: Bool { current?.isReady == true }
     var autoBlockSize: Int { Int(current?.info.map { WipeMosaicCore.autoBlock($0.size) } ?? 32) }
     func needsReanalysis(_ v: VideoItem) -> Bool { v.analysis != nil && v.analyzedTiles != accuracy.rawValue }
@@ -270,6 +306,87 @@ final class AppModel {
             updateRegisteredHints()
         } catch {
             alert = AppAlert(title: "写真を削除できませんでした", message: AppModel.describe(error))
+        }
+    }
+
+    // MARK: - Stickers
+
+    /// Put a sticker over a person's face (nil: back to the mosaic or blur), together with
+    /// the people who may be the same person, like checking. The person is checked too:
+    /// choosing a sticker means hiding them. Undoable.
+    func setSticker(_ id: UUID?, for person: Int) {
+        guard let v = current else { return }
+        var map = v.stickers
+        for p in v.withSimilar([person]) { map[p] = id }
+        let oldMap = v.stickers, oldSelection = v.selected
+        let selection = id == nil ? v.selected : v.selected.union(v.withSimilar([person]))
+        guard map != oldMap || selection != oldSelection else { return }
+        applyStickers(map, selection, to: v, action: id == nil ? "スタンプを外す" : "スタンプを使う")
+    }
+
+    private func applyStickers(_ map: [Int: UUID], _ selection: Set<Int>, to v: VideoItem, action: String) {
+        let oldMap = v.stickers, oldSelection = v.selected
+        v.stickers = map
+        v.selected = selection
+        selectionChanged(v)
+        guard let um = undoManager else { return }
+        let id = v.id
+        um.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated {
+                guard let v = model.videos.first(where: { $0.id == id }), v.analysis != nil else { return }
+                if model.currentID != id { model.currentID = id }
+                model.applyStickers(oldMap, oldSelection, to: v, action: action)
+            }
+        }
+        um.setActionName(action)
+    }
+
+    /// Ask for an image for this person's face.
+    func chooseStickerImage(for person: Int) {
+        stickerTarget = person
+        importingSticker = true
+    }
+
+    /// Add an image to the stickers (kept on this Mac) and, if a person was waiting for it,
+    /// put it over their face.
+    func addSticker(from url: URL) {
+        let person = stickerTarget
+        stickerTarget = nil
+        let videoID = currentID
+        Task.detached(priority: .userInitiated) { [weak self] in
+            weak let model = self
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let result = Result { () throws -> StickerItem in
+                let item = StickerItem(id: UUID(), sticker: try Sticker(contentsOf: url))
+                try StickerStore.save(item)
+                return item
+            }
+            await model?.finishAddingSticker(result, name: url.lastPathComponent, person: person, videoID: videoID)
+        }
+    }
+
+    private func finishAddingSticker(_ result: Result<StickerItem, Error>, name: String, person: Int?, videoID: UUID?) {
+        switch result {
+        case .success(let item):
+            stickerLibrary.append(item)
+            if let person, videoID == currentID { setSticker(item.id, for: person) }
+        case .failure(let error):
+            alert = AppAlert(title: "「\(name)」をスタンプにできませんでした", message: AppModel.describe(error))
+        }
+    }
+
+    /// Delete a sticker from this Mac; people using it go back to the mosaic or blur.
+    func removeSticker(_ item: StickerItem) {
+        do {
+            try StickerStore.delete(item.id)
+            stickerLibrary.removeAll { $0.id == item.id }
+            for v in videos where v.stickers.values.contains(item.id) {
+                v.stickers = v.stickers.filter { $0.value != item.id }
+                if v.id == currentID { refreshLive() }
+            }
+        } catch {
+            alert = AppAlert(title: "スタンプを削除できませんでした", message: AppModel.describe(error))
         }
     }
 
@@ -511,6 +628,7 @@ final class AppModel {
         v.crossHints = [:]
         v.focusedPerson = nil
         v.selected = []
+        v.stickers = [:]
         undoManager?.removeAllActions()  // person numbers change; old checks no longer apply
         v.state = .waiting
         selectionChanged(v)
@@ -798,8 +916,13 @@ final class AppModel {
     /// Push the current selection and settings to the player's mosaic and redraw if paused.
     private func refreshLive() {
         guard let v = current else { return }
-        v.live.update(frames: v.frames(hold: hold), render: render(for: v), enabled: viewMode == .mosaic)
+        v.live.update(frames: frames(for: v), render: render(for: v), enabled: viewMode == .mosaic)
         redrawIfPaused()
+    }
+
+    /// What is hidden in each frame of `v` with the current choices and settings.
+    private func frames(for v: VideoItem) -> [FrameFaces] {
+        v.frames(hold: hold, stickered: Set(activeStickers(v).keys))
     }
 
     private func redrawIfPaused() {
@@ -1016,9 +1139,10 @@ final class AppModel {
             }
             return
         }
-        let frames = v.frames(hold: hold)
+        let frames = frames(for: v)
         let render = render(for: v)
         let selection = v.selected
+        let stickers = activeStickers(v)
         let params = mosaicParams
         // What the frames were made with (not what is set now), so a later change shows as
         // not written yet.
@@ -1038,8 +1162,9 @@ final class AppModel {
             }
             v.summary = JobSummary(
                 output: out, format: format, frames: frames.count,
-                mosaicFrames: frames.filter { !$0.mosaic.isEmpty || !$0.exact.isEmpty }.count, dips: findDips(frames),
-                elapsed: Date().timeIntervalSince(started), selection: selection, params: params, text: textOptions)
+                mosaicFrames: frames.filter(\.hidesAnything).count, dips: findDips(frames),
+                elapsed: Date().timeIntervalSince(started), selection: selection, params: params, text: textOptions,
+                stickers: stickers)
             v.resultItem = AVPlayerItem(url: out)
             v.job = .done
         } catch {

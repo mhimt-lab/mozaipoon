@@ -26,6 +26,9 @@ struct InspectorView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
+        .fileImporter(isPresented: $model.importingSticker, allowedContentTypes: [.image]) { result in
+            if case .success(let url) = result { model.addSticker(from: url) } else { model.stickerTarget = nil }
+        }
     }
 
     private var peopleList: some View {
@@ -228,7 +231,7 @@ private struct PersonRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("人物 \(person.id)")
                         .font(.headline)
-                    Text(on ? "モザイクあり・\(duration)" : "\(duration)映っています")
+                    Text(on ? "\(hiddenLabel)・\(duration)" : "\(duration)映っています")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -245,10 +248,20 @@ private struct PersonRow: View {
                 .buttonStyle(.borderless)
                 .help("この人が映る次の場面へ移動します")
             }
+            if on {
+                CoverMenu(model: model, video: video, person: person.id)
+                    .padding(.leading, 26)
+            }
             badges
                 .padding(.leading, 26)
         }
         .padding(.vertical, 4)
+    }
+
+    private var stickerItem: StickerItem? { model.sticker(video.stickers[person.id]) }
+
+    private var hiddenLabel: String {
+        stickerItem != nil ? "スタンプ" : model.coverStyle == .blur ? "ぼかしあり" : "モザイクあり"
     }
 
     private var duration: String {
@@ -262,8 +275,16 @@ private struct PersonRow: View {
         let similar = person.similar
         let registered = !checked && video.registeredHints[person.id] != nil
         let other = checked ? nil : video.crossHints[person.id]
-        if !similar.isEmpty || registered || other != nil {
+        // Share of the face the sticker covers (the image is not drawn over a mosaic).
+        let coverage = checked ? stickerItem.map { $0.sticker.coverage(scale: model.stickerScale) } : nil
+        let seeThrough = coverage.map { $0 < 0.98 } ?? false
+        if !similar.isEmpty || registered || other != nil || seeThrough {
             VStack(alignment: .leading, spacing: 3) {
+                if let coverage, seeThrough {
+                    Badge(
+                        text: "この画像では顔の一部が見えます（隠れるのは顔の\(Int((coverage * 100).rounded(.down)))%）。「スタンプの大きさ」を上げるか、透明な部分のない画像にしてください",
+                        systemImage: "eye.trianglebadge.exclamationmark")
+                }
                 if !similar.isEmpty {
                     let names = similar.map { "人物 \($0)" }.joined(separator: "、")
                     Badge(
@@ -499,33 +520,18 @@ private struct MosaicSection: View {
         Section {
             DisclosureGroup(isExpanded: $model.mosaicExpanded) {
                 VStack(alignment: .leading, spacing: 16) {
+                    CoverStyleRows(model: model)
+                    if model.current.map({ !model.activeStickers($0).isEmpty }) == true {
+                        SliderRow(title: "スタンプの大きさ", value: $model.stickerScale, range: 0.8...2.0, step: 0.05,
+                                  low: "小さい", high: "大きい", text: "\(Int((model.stickerScale * 100).rounded()))%",
+                                  note: "顔の写真は、写真の顔を動画の顔に合わせて重ねます。スタンプの下にはモザイクをかけないので、画像の透明な部分からは顔が見えます。")
+                    }
                     SliderRow(title: "顔の前後も続ける時間", value: $model.hold, range: 0...3, step: 0.25,
                               low: "0秒", high: "3秒", text: String(format: "%.2g秒", model.hold),
                               note: "顔が映る前と見えなくなった後も、この時間だけモザイクを続けます。横を向いた瞬間に外れるのを防ぎます。")
-                    SliderRow(title: "モザイクの広さ", value: $model.pad, range: 0.2...1.0, step: 0.05,
+                    SliderRow(title: "\(model.coverStyle == .blur ? "ぼかし" : "モザイク")の広さ", value: $model.pad, range: 0.2...1.0, step: 0.05,
                               low: "狭い", high: "広い", text: "\(Int((model.pad * 100).rounded()))%",
                               note: "広げると、髪や耳まで隠れます。")
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("モザイクの粗さ")
-                            Spacer()
-                            Toggle("おまかせ", isOn: $model.autoBlock)
-                                .toggleStyle(.checkbox)
-                        }
-                        Slider(value: blockBinding, in: 8...96, step: 2) {
-                            Text("モザイクの粗さ")
-                        } minimumValueLabel: {
-                            Text("細かい").font(.callout).foregroundStyle(.secondary)
-                        } maximumValueLabel: {
-                            Text("粗い").font(.callout).foregroundStyle(.secondary)
-                        }
-                        .labelsHidden()
-                        .disabled(model.autoBlock)
-                        Text(model.autoBlock ? "おまかせでは、動画の大きさに合わせて決めます。" : "粗くするほど、顔の形が分からなくなります。")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                     Text("変えると「モザイクあり」の表示にすぐ反映されます。すべての動画に共通です。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -535,7 +541,7 @@ private struct MosaicSection: View {
                 .padding(.leading, 4)
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("モザイクの調整").font(.headline)
+                    Text("隠し方の調整").font(.headline)
                     if !model.mosaicExpanded {
                         Text(summary)
                             .font(.callout)
@@ -547,14 +553,110 @@ private struct MosaicSection: View {
         }
     }
 
+    private var summary: String {
+        let style = model.coverStyle == .blur ? "ぼかし" : "モザイク"
+        return "\(style)・続ける \(String(format: "%.2g秒", model.hold))・広さ \(Int((model.pad * 100).rounded()))%・\(model.coverStyle == .blur ? "強さ" : "粗さ") \(model.autoBlock ? "おまかせ" : "手動")"
+    }
+}
+
+/// Mosaic or blur, and how coarse (or strong) it is. Shared by faces and on-screen text.
+struct CoverStyleRows: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        let blur = model.coverStyle == .blur
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("隠し方", selection: $model.coverStyle) {
+                    Text("モザイク").tag(CoverStyle.mosaic)
+                    Text("ぼかし").tag(CoverStyle.blur)
+                }
+                .pickerStyle(.segmented)
+                Text("顔と画面の文字に使います。スタンプを選んだ人には、スタンプを重ねます。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(blur ? "ぼかしの強さ" : "モザイクの粗さ")
+                    Spacer()
+                    Toggle("おまかせ", isOn: $model.autoBlock)
+                        .toggleStyle(.checkbox)
+                }
+                Slider(value: blockBinding, in: 8...96, step: 2) {
+                    Text(blur ? "ぼかしの強さ" : "モザイクの粗さ")
+                } minimumValueLabel: {
+                    Text(blur ? "弱い" : "細かい").font(.callout).foregroundStyle(.secondary)
+                } maximumValueLabel: {
+                    Text(blur ? "強い" : "粗い").font(.callout).foregroundStyle(.secondary)
+                }
+                .labelsHidden()
+                .disabled(model.autoBlock)
+                Text(model.autoBlock
+                     ? "おまかせでは、動画の大きさに合わせて決めます。"
+                     : blur ? "強くするほど、顔の形や文字が分からなくなります。" : "粗くするほど、顔の形が分からなくなります。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     /// While automatic, the slider shows the size actually used.
     private var blockBinding: Binding<Double> {
         Binding(get: { model.autoBlock ? Double(model.autoBlockSize) : model.block },
                 set: { model.block = $0 })
     }
+}
 
-    private var summary: String {
-        "続ける \(String(format: "%.2g秒", model.hold))・広さ \(Int((model.pad * 100).rounded()))%・粗さ \(model.autoBlock ? "おまかせ" : "手動")"
+/// How one checked person is hidden: the mosaic (or blur), or one of the stickers.
+private struct CoverMenu: View {
+    @Bindable var model: AppModel
+    let video: VideoItem
+    let person: Int
+
+    var body: some View {
+        let current = model.sticker(video.stickers[person])
+        let styleName = model.coverStyle == .blur ? "ぼかし" : "モザイク"
+        Menu {
+            Picker("隠し方", selection: Binding(get: { current?.id }, set: { model.setSticker($0, for: person) })) {
+                Text(styleName).tag(UUID?.none)
+                ForEach(Array(model.stickerLibrary.enumerated()), id: \.element.id) { i, item in
+                    Label {
+                        Text("スタンプ \(i + 1)")
+                    } icon: {
+                        Image(nsImage: menuImage(item.sticker.cgImage))
+                    }
+                    .tag(Optional(item.id))
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+            Divider()
+            Button("画像を選んでスタンプにする…") { model.chooseStickerImage(for: person) }
+        } label: {
+            HStack(spacing: 6) {
+                if let current {
+                    // A menu's label is drawn by AppKit: SwiftUI sizing is ignored there.
+                    Image(nsImage: menuImage(current.sticker.cgImage))
+                } else {
+                    Image(systemName: model.coverStyle == .blur ? "drop.halffull" : "square.grid.3x3.fill")
+                }
+                Text(current == nil ? "隠し方：\(styleName)" : "隠し方：スタンプ")
+            }
+        }
+        .menuStyle(.button)
+        .controlSize(.small)
+        .fixedSize()
+        .help("モザイクの代わりに、好きな画像（顔の写真など）をこの人の顔に重ねられます")
+    }
+
+    /// A menu item image: AppKit menus draw an NSImage at its own size.
+    private func menuImage(_ cg: CGImage) -> NSImage {
+        let h: CGFloat = 18
+        let w = max(1, h * CGFloat(cg.width) / CGFloat(max(cg.height, 1)))
+        return NSImage(cgImage: cg, size: NSSize(width: min(w, 36), height: h))
     }
 }
 

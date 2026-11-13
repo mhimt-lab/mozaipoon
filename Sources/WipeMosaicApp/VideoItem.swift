@@ -35,6 +35,8 @@ struct MosaicParams: Equatable {
     var pad: Double
     /// nil = automatic block size.
     var block: Double?
+    var style: CoverStyle
+    var stickerScale: Double
 }
 
 struct JobSummary {
@@ -48,6 +50,8 @@ struct JobSummary {
     let params: MosaicParams
     /// What was hidden in on-screen text (nil: nothing).
     let text: TextMaskOptions?
+    /// Chosen people covered by a sticker: person → sticker id.
+    let stickers: [Int: UUID]
 }
 
 /// One video in the list, with its own faces, selection, player item and export result.
@@ -80,6 +84,8 @@ final class VideoItem: Identifiable {
     /// Where each person appears (seconds), for the timeline and "次の場面へ".
     var scenes: [Int: [ClosedRange<Double>]] = [:]
     var selected: Set<Int> = []
+    /// Person → sticker drawn over their face instead of the mosaic (used while checked).
+    var stickers: [Int: UUID] = [:]
     var focusedPerson: Int?
     var job: JobState = .idle
     var summary: JobSummary?
@@ -128,7 +134,10 @@ final class VideoItem: Identifiable {
     var hasChoices: Bool { (analysis != nil && !selected.isEmpty) || hiddenTextCount > 0 }
 
     func resultIsStale(_ params: MosaicParams) -> Bool {
-        summary.map { $0.selection != selected || $0.params != params || $0.text != effectiveTextOptions } ?? false
+        summary.map {
+            $0.selection != selected || $0.params != params || $0.text != effectiveTextOptions
+                || $0.stickers != stickers.filter { selected.contains($0.key) }
+        } ?? false
     }
     func hasUnexportedWork(_ params: MosaicParams) -> Bool {
         hasChoices && (summary == nil || resultIsStale(params))
@@ -233,8 +242,8 @@ final class VideoItem: Identifiable {
         return out
     }
 
-    func frames(hold: Double) -> [FrameFaces] {
-        let faces = analysis?.frames(selected: selected, endHold: hold) ?? []
+    func frames(hold: Double, stickered: Set<Int>) -> [FrameFaces] {
+        let faces = analysis?.frames(selected: selected, endHold: hold, stickered: stickered) ?? []
         guard let text, let mask = textMask, !mask.isEmpty else { return faces }
         return withText(faces, text: text, mask: mask)
     }

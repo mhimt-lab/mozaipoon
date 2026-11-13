@@ -65,6 +65,13 @@ struct TextInspectorView: View {
                 kindsSection(text)
                 wordsSection(text)
                 thisVideoSection
+                Section {
+                    CoverStyleRows(model: model)
+                        .padding(.vertical, 4)
+                        .listRowSeparator(.hidden)
+                } header: {
+                    SectionTitle("隠し方（すべての動画に共通）")
+                }
                 linesSection(text)
             }
         }

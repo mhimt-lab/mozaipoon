@@ -98,7 +98,11 @@ public struct VideoFaces: Sendable {
     /// - For selected people, a gap of up to `bridge` seconds between two of their tracks is
     ///   filled (interpolated, enlarged), and the mosaic stays `endHold` seconds before each
     ///   appearance and after each disappearance at the nearest known position.
-    public func frames(selected: Set<Int>, endHold: Double = 1.0, bridge: Double = 2.0) -> [FrameFaces] {
+    /// - Selected people in `stickered` get one steadied box per frame (`FrameFaces.stickers`)
+    ///   instead of mosaic boxes: the face itself first, then a bridge, then a hold position.
+    public func frames(
+        selected: Set<Int>, endHold: Double = 1.0, bridge: Double = 2.0, stickered: Set<Int> = []
+    ) -> [FrameFaces] {
         let owner = personOfTrack
         let n = times.count
         let fps = max(self.fps, 1)
@@ -106,6 +110,17 @@ public struct VideoFaces: Sendable {
         let bridgeFrames = Int((bridge * fps).rounded())
         var mosaic = [[CGRect]](repeating: [], count: n)
         var other = [[CGRect]](repeating: [], count: n)
+        // Sticker people: the best box per frame, with its priority (0 face, 1 bridge, 2 hold).
+        var stick: [Int: [(rect: CGRect, rank: Int)?]] = [:]
+        for p in stickered.intersection(selected) { stick[p] = Array(repeating: nil, count: n) }
+        func add(_ r: CGRect, person: Int, frame f: Int, rank: Int) {
+            guard stick[person] != nil else { return mosaic[f].append(r) }
+            if let cur = stick[person]![f] {
+                if rank < cur.rank { stick[person]![f] = (r, rank) } else if rank == cur.rank { stick[person]![f] = (cur.rect.union(r), rank) }
+            } else {
+                stick[person]![f] = (r, rank)
+            }
+        }
         var selectedTracks: [Int: [FaceTrack]] = [:]
         for t in tracks {
             let person = owner[t.id] ?? -1
@@ -113,10 +128,10 @@ public struct VideoFaces: Sendable {
             if isSelected { selectedTracks[person, default: []].append(t) }
             for f in t.span {
                 guard let r = t.rect(atFrame: f) else { continue }
-                if isSelected { mosaic[f].append(t.isTracked(atFrame: f) ? scaled(r, 1.25) : r) } else { other[f].append(r) }
+                if isSelected { add(t.isTracked(atFrame: f) ? scaled(r, 1.25) : r, person: person, frame: f, rank: 0) } else { other[f].append(r) }
             }
         }
-        for (_, ts) in selectedTracks {
+        for (person, ts) in selectedTracks {
             let ordered = ts.sorted { $0.span.lowerBound < $1.span.lowerBound }
             for (k, t) in ordered.enumerated() {
                 // Bridge to this person's next track if it starts soon after this one ends.
@@ -126,20 +141,27 @@ public struct VideoFaces: Sendable {
                     if b - a > 1 && b - a - 1 <= bridgeFrames {
                         let ra = t.lastRect, rb = next.detections.first!.rect
                         for f in (a + 1)..<b {
-                            mosaic[f].append(scaled(lerp(ra, rb, CGFloat(f - a) / CGFloat(b - a)), 1.3))
+                            add(scaled(lerp(ra, rb, CGFloat(f - a) / CGFloat(b - a)), 1.3), person: person, frame: f, rank: 1)
                         }
                     }
                 }
                 guard holdFrames > 0 else { continue }
                 let first = t.detections.first!.rect
-                for f in max(0, t.span.lowerBound - holdFrames)..<t.span.lowerBound { mosaic[f].append(first) }
+                for f in max(0, t.span.lowerBound - holdFrames)..<t.span.lowerBound { add(first, person: person, frame: f, rank: 2) }
                 let last = t.lastRect
                 if t.span.upperBound + 1 < n {
-                    for f in (t.span.upperBound + 1)...min(n - 1, t.span.upperBound + holdFrames) { mosaic[f].append(last) }
+                    for f in (t.span.upperBound + 1)...min(n - 1, t.span.upperBound + holdFrames) { add(last, person: person, frame: f, rank: 2) }
                 }
             }
         }
-        return times.indices.map { FrameFaces(time: times[$0], mosaic: mosaic[$0], kept: other[$0]) }
+        var stickers = [[StickerBox]](repeating: [], count: n)
+        for (person, boxes) in stick {
+            let steady = steadyBoxes(
+                boxes.map { $0?.rect }, centreFrames: max(1, Int((0.25 * fps).rounded())),
+                sizeFrames: max(1, Int((0.5 * fps).rounded())), marginFrames: max(1, Int((0.25 * fps).rounded())))
+            for f in 0..<n { if let r = steady[f] { stickers[f].append(StickerBox(rect: r, person: person)) } }
+        }
+        return times.indices.map { FrameFaces(time: times[$0], mosaic: mosaic[$0], kept: other[$0], stickers: stickers[$0]) }
     }
 
     /// Best identity distance from every person to one registered photo.

@@ -17,6 +17,8 @@ struct CommonOptions {
     var minInside = 0.8
     var keepAllInWipe = false
     var render = RenderSettings()
+    /// People mode: person number → image drawn over that person's face (--sticker).
+    var stickerFiles: [Int: URL] = [:]
 }
 
 struct RunOptions {
@@ -72,7 +74,12 @@ let usage = """
       --min-inside <0-1>   Wipe: fraction of a face box that must be inside the wipe (0.8)
       --keep-all-in-wipe   Wipe: keep all faces inside the wipe (default: only the largest)
       --pad <ratio>        Expand mosaic around each face (default 0.45)
-      --block <px>         Mosaic block size (default: longest side / 60)
+      --block <px>         Mosaic block size (default: longest side / 60); also the blur strength
+      --style <s>          How faces and text are hidden: mosaic (default) or blur
+      --sticker <n>=<img>  People: cover person n's face with this image instead (e.g. a cut-out
+                           face photo; a face in the image is laid over the face). Repeatable.
+                           Not drawn under the image: a transparent part shows the face below.
+      --sticker-scale <x>  Sticker size relative to the face (default 1.2)
       --tiles <n>          Also detect on an n x n grid for small faces (default: people 4, wipe 3; 1 = off)
       --hold <seconds>     Keep the mosaic before/after a face is seen (default: people 1.0, wipe 0.3)
       --tile-interval <s>  People: tile passes only every <s> seconds (default 0.1; 0 = every frame)
@@ -141,6 +148,17 @@ extension Command {
             case "--min-inside": c.minInside = try parseDouble(it.next(), a, range: 0.01...1)
             case "--pad": c.render.pad = try parseDouble(it.next(), a, range: 0...5)
             case "--block": c.render.block = try parseDouble(it.next(), a, range: 2...1000)
+            case "--style":
+                let v = try value(a)
+                guard let style = CoverStyle(rawValue: v) else { throw ToolError("--style expects mosaic or blur") }
+                c.render.style = style
+            case "--sticker":
+                let v = try value(a)
+                guard let eq = v.firstIndex(of: "="), let n = Int(v[..<eq]), n > 0, v.index(after: eq) < v.endIndex else {
+                    throw ToolError("--sticker expects <person>=<image>, e.g. 2=face.png")
+                }
+                c.stickerFiles[n] = URL(fileURLWithPath: String(v[v.index(after: eq)...]))
+            case "--sticker-scale": c.render.stickerScale = try parseDouble(it.next(), a, range: 0.5...4)
             case "--tiles":
                 c.render.tiles = Int(try parseDouble(it.next(), a, range: 1...6))
                 tilesGiven = true
@@ -210,6 +228,10 @@ extension Command {
         default: break
         }
 
+        let notInPeople = Set(c.stickerFiles.keys).subtracting(c.people)
+        guard notInPeople.isEmpty else {
+            throw ToolError("--sticker needs the person in --people too: \(notInPeople.sorted())")
+        }
         guard !textOption || c.screenText else {
             throw ToolError("--text-kinds, --words, --lines and --all-text need --screen-text")
         }
@@ -225,6 +247,7 @@ extension Command {
                     report: report.map { URL(fileURLWithPath: $0) }, progress: progress))
         }
         guard !c.wipes.isEmpty else { throw ToolError("preview supports --wipe only") }
+        guard c.stickerFiles.isEmpty else { throw ToolError("preview does not support --sticker") }
         guard positional.count == 1, let at, let out else { throw ToolError("preview needs <input> --at <s> -o <png>") }
         c.input = URL(fileURLWithPath: positional[0])
         return .preview(PreviewOptions(common: c, at: at, output: URL(fileURLWithPath: out)))

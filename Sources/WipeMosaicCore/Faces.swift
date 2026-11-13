@@ -18,12 +18,20 @@ public struct FrameFaces: Sendable {
     public let kept: [CGRect]
     /// Other boxes to mosaic exactly as given (on-screen text, margin already included).
     public let exact: [CGRect]
-    public init(time: Double, mosaic: [CGRect], kept: [CGRect], exact: [CGRect] = []) {
+    /// Faces covered by a person's sticker instead of the mosaic (not in `mosaic`).
+    public let stickers: [StickerBox]
+    public init(time: Double, mosaic: [CGRect], kept: [CGRect], exact: [CGRect] = [], stickers: [StickerBox] = []) {
         self.time = time
         self.mosaic = mosaic
         self.kept = kept
         self.exact = exact
+        self.stickers = stickers
     }
+
+    /// Faces hidden in this frame, by mosaic or sticker.
+    public var faceCount: Int { mosaic.count + stickers.count }
+    /// Something is hidden in this frame.
+    public var hidesAnything: Bool { !mosaic.isEmpty || !exact.isEmpty || !stickers.isEmpty }
 }
 
 private func area(_ r: CGRect) -> CGFloat { r.isNull ? 0 : r.width * r.height }

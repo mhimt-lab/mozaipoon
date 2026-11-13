@@ -303,7 +303,7 @@ public func withText(_ faces: [FrameFaces], text: ScreenText, mask: TextMask) ->
         return text.times.indices.map { FrameFaces(time: text.times[$0], mosaic: [], kept: [], exact: mask.frames[$0]) }
     }
     return faces.map { f in
-        FrameFaces(time: f.time, mosaic: f.mosaic, kept: f.kept, exact: mask.frames[text.frameIndex(at: f.time)])
+        FrameFaces(time: f.time, mosaic: f.mosaic, kept: f.kept, exact: mask.frames[text.frameIndex(at: f.time)], stickers: f.stickers)
     }
 }
 

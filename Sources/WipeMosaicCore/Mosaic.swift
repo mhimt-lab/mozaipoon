@@ -21,6 +21,12 @@ public struct RenderSettings: Sendable {
     public var hold: Double = 0.3
     /// People mode: run the tile passes only every this many seconds (0 = every frame).
     public var tileInterval: Double = 0.1
+    /// How boxes without a sticker are hidden (faces and on-screen text).
+    public var style: CoverStyle = .mosaic
+    /// People mode: person id → image drawn over that person's face instead of the mosaic.
+    public var stickers: [Int: Sticker] = [:]
+    /// Sticker size: the face box (or the sticker's own face) times this.
+    public var stickerScale: Double = 1.2
     public init() {}
 
     func blockSize(for size: CGSize) -> CGFloat { block.map { CGFloat($0) } ?? autoBlock(size) }
@@ -198,6 +204,13 @@ struct FaceIndex: Sendable {
     func allRects(at t: Double, hold: Double, pad: Double) -> [CGRect] {
         mosaicRects(at: t, hold: hold).map { padded($0, pad) } + exactRects(at: t)
     }
+
+    /// Faces covered by a sticker in the frame shown at `t` (held per person already, so no
+    /// ±hold here: drawing a picture at several past positions would show several faces).
+    func stickerBoxes(at t: Double) -> [StickerBox] {
+        guard !frames.isEmpty else { return [] }
+        return frames[max(0, firstIndex(atOrAfter: t + 1e-3) - 1)].stickers
+    }
 }
 
 /// Wipe mode pass 1: decode every frame and classify faces.
@@ -292,8 +305,8 @@ public func renderPreview(asset: AVURLAsset, info: VideoInfo, at: Double, settin
     let wipes = settings.ciWipes(videoHeight: img.extent.height)
     let faces = try detectFaces(image: img, tiles: settings.render.tiles, extraRegions: wipes)
     let c = classify(faces: faces, wipes: wipes, minInside: settings.minInside, keepAll: settings.keepAllInWipe)
-    let mosaicked = applyMosaic(
-        img, rects: c.mosaic.map { padded($0, settings.render.pad) },
+    let mosaicked = applyCover(
+        img, rects: c.mosaic.map { padded($0, settings.render.pad) }, stickers: [], render: settings.render,
         block: settings.render.blockSize(for: info.size))
     let boxes =
         wipes.map { PreviewBox(rect: $0, kind: .wipe) } + c.kept.map { PreviewBox(rect: $0, kind: .kept) }
@@ -331,10 +344,10 @@ public func findDips(_ frames: [FrameFaces], window: Double = 1.0) -> [Dip] {
         let t = frames[i].time
         while frames[lo].time < t - window { lo += 1 }
         while hi + 1 < n && frames[hi + 1].time <= t + window { hi += 1 }
-        let left = frames[lo..<i].map(\.mosaic.count).max() ?? 0
-        let right = i + 1 <= hi ? (frames[(i + 1)...hi].map(\.mosaic.count).max() ?? 0) : 0
+        let left = frames[lo..<i].map(\.faceCount).max() ?? 0
+        let right = i + 1 <= hi ? (frames[(i + 1)...hi].map(\.faceCount).max() ?? 0) : 0
         let around = min(left, right)
-        if frames[i].mosaic.count < around { flagged.append((i, around)) }
+        if frames[i].faceCount < around { flagged.append((i, around)) }
     }
     var dips: [Dip] = []
     var k = 0
@@ -345,7 +358,7 @@ public func findDips(_ frames: [FrameFaces], window: Double = 1.0) -> [Dip] {
         dips.append(
             Dip(
                 start: frames[idx.lowerBound].time, end: frames[idx.upperBound].time,
-                count: idx.map { frames[$0].mosaic.count }.min() ?? 0,
+                count: idx.map { frames[$0].faceCount }.min() ?? 0,
                 around: flagged[k...j].map(\.1).max() ?? 0))
         k = j + 1
     }

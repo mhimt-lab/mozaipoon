@@ -190,7 +190,8 @@ public func writeMosaic(
                     let pts = CMSampleBufferGetPresentationTimeStamp(sample)
                     let ok: Bool = autoreleasepool {
                         let rects = index.allRects(at: pts.seconds, hold: hold, pad: pad)
-                        if rects.isEmpty { return adaptor.append(src, withPresentationTime: pts) }
+                        let stickers = index.stickerBoxes(at: pts.seconds)
+                        if rects.isEmpty && stickers.isEmpty { return adaptor.append(src, withPresentationTime: pts) }
                         guard let pool = adaptor.pixelBufferPool else { return false }
                         var dst: CVPixelBuffer?
                         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &dst) == kCVReturnSuccess, let dst else {
@@ -198,7 +199,7 @@ public func writeMosaic(
                         }
                         CVBufferPropagateAttachments(src, dst)
                         let up = uprightImage(src, info)
-                        let mosaicked = applyMosaic(up, rects: rects, block: block)
+                        let mosaicked = applyCover(up, rects: rects, stickers: stickers, render: render, block: block)
                         let raw = info.orientation == .up ? mosaicked : mosaicked.oriented(inverse(info.orientation))
                         let space =
                             CVImageBufferGetColorSpace(src)?.takeUnretainedValue()

@@ -9,6 +9,7 @@ struct SettingsView: View {
         TabView {
             Tab("検出", systemImage: "faceid") { DetectionSettings(model: model) }
             Tab("登録した顔", systemImage: "person.crop.square") { RegisteredSettings(model: model) }
+            Tab("スタンプ", systemImage: "face.smiling") { StickerSettings(model: model) }
         }
         .frame(width: 520)
         .scenePadding(.minimum)
@@ -131,5 +132,50 @@ private struct RegisteredTile: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("登録した顔の写真")
         .accessibilityAction(named: "登録を削除") { model.removeRegistered(face) }
+    }
+}
+
+private struct StickerSettings: View {
+    @Bindable var model: AppModel
+
+    private let columns = [GridItem(.adaptive(minimum: 76, maximum: 88), spacing: 14)]
+
+    var body: some View {
+        Form {
+            Section {
+                if model.stickerLibrary.isEmpty {
+                    Text("まだありません。右の一覧でモザイクをかける人の「隠し方」から画像を選ぶと、ここに並びます。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                        ForEach(Array(model.stickerLibrary.enumerated()), id: \.element.id) { i, item in
+                            VStack(spacing: 6) {
+                                Image(decorative: item.sticker.cgImage, scale: 1)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(width: 64, height: 64)
+                                Text("スタンプ \(i + 1)").font(.callout)
+                            }
+                            .contextMenu {
+                                Button("削除", systemImage: "trash", role: .destructive) { model.removeSticker(item) }
+                            }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("スタンプ \(i + 1)")
+                            .accessibilityAction(named: "削除") { model.removeSticker(item) }
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+            } header: {
+                Text("顔に重ねる画像")
+            } footer: {
+                Text("削除するには、画像を右クリックします。使っていた人は、モザイク（ぼかし）に戻ります。画像はこのMacの中だけに保存され、どこにも送信されません。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(height: 300)
     }
 }

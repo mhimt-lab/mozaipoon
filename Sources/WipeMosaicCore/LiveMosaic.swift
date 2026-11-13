@@ -27,15 +27,19 @@ public final class LiveMosaic: @unchecked Sendable {
             let source = request.sourceImage
             let (index, render, enabled) = lock.withLock { (self.index, self.render, self.enabled) }
             let origin = source.extent.origin
+            let t = request.compositionTime.seconds
             let rects = enabled
-                ? index.allRects(at: request.compositionTime.seconds, hold: render.hold, pad: render.pad).map {
-                    $0.offsetBy(dx: origin.x, dy: origin.y)
-                } : []
-            guard !rects.isEmpty else {
+                ? index.allRects(at: t, hold: render.hold, pad: render.pad).map { $0.offsetBy(dx: origin.x, dy: origin.y) }
+                : []
+            let stickers = enabled
+                ? index.stickerBoxes(at: t).map { StickerBox(rect: $0.rect.offsetBy(dx: origin.x, dy: origin.y), person: $0.person) }
+                : []
+            guard !rects.isEmpty || !stickers.isEmpty else {
                 request.finish(with: source, context: nil)
                 return
             }
-            let out = applyMosaic(source, rects: rects, block: render.blockSize(for: source.extent.size))
+            let out = applyCover(
+                source, rects: rects, stickers: stickers, render: render, block: render.blockSize(for: source.extent.size))
             request.finish(with: out, context: nil)
         }
     }
