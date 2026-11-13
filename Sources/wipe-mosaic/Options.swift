@@ -13,6 +13,7 @@ struct CommonOptions {
     var textKinds: Set<TextKind> = Set(TextKind.allCases)
     var textWords: [String] = []
     var textLines: Set<Int> = []
+    var textAll = false
     var minInside = 0.8
     var keepAllInWipe = false
     var render = RenderSettings()
@@ -76,6 +77,7 @@ let usage = """
       --text-kinds <list>  Screen text: kinds to hide, from number,email,url,address (default all; none = off)
       --words <list>       Screen text: also hide these words, comma-separated (e.g. a name)
       --lines <list>       Screen text: hide these lines whole (numbers from `wipe-mosaic text --list`)
+      --all-text           Screen text: hide every line that was read (a device screen filmed with a camera)
       --overwrite          Overwrite an existing output file (run only)
       --report <csv>       Write per-frame face counts for review (run only)
       --progress           Print "PROGRESS <scan|render> <0-1>" lines (run only)
@@ -165,6 +167,7 @@ extension Command {
                     return n
                 }
                 c.textLines.formUnion(ids)
+            case "--all-text": c.textAll = true
             case "--list": list = true
             case "--keep-all-in-wipe": c.keepAllInWipe = true
             case "--overwrite": overwrite = true
@@ -199,7 +202,7 @@ extension Command {
             guard positional.count == 1 else { throw ToolError("text needs <input>") }
             return .text(
                 input: URL(fileURLWithPath: positional[0]),
-                options: TextMaskOptions(kinds: c.textKinds, words: c.textWords, lines: c.textLines), list: list)
+                options: TextMaskOptions(kinds: c.textKinds, words: c.textWords, lines: c.textLines, all: c.textAll), list: list)
         default: break
         }
 

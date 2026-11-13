@@ -12,10 +12,10 @@ extension TextKind {
     }
     var note: String {
         switch self {
-        case .number: "6桁以上の数字（ハイフンや空白を含む）"
+        case .number: "6桁以上の数字（ハイフンや空白を含む。A-123456 のような英字付きも）"
         case .email: "〜@〜.〜 の形の文字"
         case .url: "https:// や www. で始まる文字、.com・.jp などで終わる文字"
-        case .address: "〒や「〜県〜市」「〜区〜1-2-3」の形の文字"
+        case .address: "〒や「〜県〜市」「〜区〜1-2-3」の形の文字。見つかった所から行の終わりまでと、すぐ下に続く行も隠します"
         }
     }
     var shortLabel: String {
@@ -58,7 +58,20 @@ struct TextInspectorView: View {
 
     private func kindsSection(_ text: ScreenText) -> some View {
         Section {
-            Text("見つかった個人情報に、自動でモザイクをかけます。その部分だけを隠し、行のほかの文字は残します。")
+            Toggle(isOn: Binding(get: { video.textAll }, set: { model.setTextAll($0) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("読み取れた文字をすべて隠す")
+                    Text("スマホやパソコンの画面をカメラで撮った動画向け。動画に入れた字幕や、服・看板の文字も隠れます。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.checkbox)
+            .listRowSeparator(.hidden)
+            Text(video.textAll
+                 ? "読み取れた文字は、すべてモザイクで隠します。"
+                 : "見つかった個人情報に、自動でモザイクをかけます。その部分だけを隠し、行のほかの文字は残します。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -78,6 +91,7 @@ struct TextInspectorView: View {
                     }
                 }
                 .toggleStyle(.checkbox)
+                .disabled(video.textAll)
                 .listRowSeparator(.hidden)
             }
         } header: {
@@ -89,7 +103,7 @@ struct TextInspectorView: View {
 
     private var wordsSection: some View {
         Section {
-            Text("名前やアカウント名など、隠したい言葉を入れます。画面のどこに出ても、その言葉の部分にモザイクをかけます。すべての動画に使われます。")
+            Text("名前やアカウント名など、隠したい言葉を入れます。画面のどこに出ても、その言葉の部分にモザイクをかけます。名字を入れると、すぐ後に続く名前も隠します。すべての動画に使われます。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -234,12 +248,13 @@ private struct TextLineRow: View {
     let entry: TextEntry
 
     var body: some View {
-        let whole = video.textLines.contains(entry.id)
+        let whole = video.textAll || video.textLines.contains(entry.id)
         let partly = !whole && (video.textMask?.hidden.contains(entry.id) ?? false)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Toggle(entry.text, isOn: Binding(get: { whole }, set: { model.setTextLine(entry.id, $0) }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()
+                .disabled(video.textAll)
                 .help(whole ? "押すと、行全体のモザイクを外します" : "押すと、行全体にモザイクをかけます")
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.text)

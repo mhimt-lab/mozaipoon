@@ -81,6 +81,8 @@ final class VideoItem: Identifiable {
     var text: ScreenText?
     /// Lines hidden whole (entry ids).
     var textLines: Set<Int> = []
+    /// Hide every line that was read (a device screen filmed with a camera).
+    var textAll = false
     /// Boxes for the current text options (kinds and words are app-wide, lines per video).
     var textMask: TextMask?
     var textOptions: TextMaskOptions?

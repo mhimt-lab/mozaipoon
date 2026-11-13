@@ -58,7 +58,7 @@ func runMosaic(_ o: RunOptions) async throws {
     if o.common.screenText {
         print("pass 1/2: reading on-screen text")
         let text = try analyzeText(asset: asset, info: info, progress: report)
-        let options = TextMaskOptions(kinds: o.common.textKinds, words: o.common.textWords, lines: o.common.textLines)
+        let options = TextMaskOptions(kinds: o.common.textKinds, words: o.common.textWords, lines: o.common.textLines, all: o.common.textAll)
         let mask = text.mask(options)
         frames = withText(frames, text: text, mask: mask)
         extra += "  text lines hidden:            \(mask.hidden.count) of \(text.entries.count)\n"

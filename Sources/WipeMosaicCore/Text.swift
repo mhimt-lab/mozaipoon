@@ -87,10 +87,13 @@ public struct TextMaskOptions: Sendable, Equatable {
     public var words: [String]
     /// Entry ids hidden as a whole line.
     public var lines: Set<Int>
-    public init(kinds: Set<TextKind>, words: [String], lines: Set<Int>) {
+    /// Hide every line that was read (a device screen filmed with a camera).
+    public var all: Bool
+    public init(kinds: Set<TextKind>, words: [String], lines: Set<Int>, all: Bool = false) {
         self.kinds = kinds
         self.words = words
         self.lines = lines
+        self.all = all
     }
 }
 
@@ -137,10 +140,20 @@ public struct ScreenText: Sendable {
         var frames = [[CGRect]](repeating: [], count: n)
         var wordHits = Set<Int>()
         var hidden = Set<Int>()
+        var relsOf: [Int: [CGRect]] = [:]
+        func add(_ rels: [CGRect], line: CGRect, at f: Int) {
+            let h = line.height
+            for rel in rels {
+                let r = CGRect(
+                    x: line.minX + rel.minX * line.width, y: line.minY + rel.minY * line.height,
+                    width: rel.width * line.width, height: rel.height * line.height)
+                frames[f].append(r.insetBy(dx: -h * 0.35, dy: -h * 0.3).intersection(bounds))
+            }
+        }
         for t in tracks {
             let entry = owner[t.id] ?? 0
             var rels: [CGRect]
-            if o.lines.contains(entry) {
+            if o.all || o.lines.contains(entry) {
                 rels = [CGRect(x: 0, y: 0, width: 1, height: 1)]
             } else {
                 rels = o.kinds.flatMap { t.parts[$0] ?? [] }
@@ -153,15 +166,39 @@ public struct ScreenText: Sendable {
             guard !rels.isEmpty else { continue }
             hidden.insert(entry)
             rels = mergeOverlapping(rels)
+            relsOf[t.id] = rels
             for f in max(0, t.first - extend)...min(n - 1, t.last + extend) {
                 guard let line = t.rect(atFrame: f, extend: extend, bounds: bounds), !line.isEmpty else { continue }
-                let h = line.height
-                for rel in rels {
-                    let r = CGRect(
-                        x: line.minX + rel.minX * line.width, y: line.minY + rel.minY * line.height,
-                        width: rel.width * line.width, height: rel.height * line.height)
-                    frames[f].append(r.insetBy(dx: -h * 0.35, dy: -h * 0.3).intersection(bounds))
+                add(rels, line: line, at: f)
+            }
+        }
+        // A line that could not be read for a moment (covered by a banner, blurred by motion,
+        // read differently) continues as a new track: keep the mosaic across the gap when a
+        // hidden line with similar text (with `all`, any text) comes back at the same place.
+        // Filmed screens drop lines for longer (glare, focus, fingers); any text at the place
+        // counts there, so a longer gap is still the same screen.
+        let maxGap = Int((fps * (o.all ? 6 : 3)).rounded())
+        let later = tracks.filter { relsOf[$0.id] != nil }.sorted { $0.first < $1.first }
+        let starts = later.map(\.first)
+        for a in later {
+            guard let rels = relsOf[a.id] else { continue }
+            let ra = a.samples[a.samples.count - 1].rect
+            var k = starts.partitionIndex { $0 > a.last }
+            while k < later.count, later[k].first - a.last <= maxGap {
+                let b = later[k]
+                k += 1
+                let rb = b.samples[0].rect
+                guard hypot(ra.midX - rb.midX, ra.midY - rb.midY) < 1.5 * max(ra.height, rb.height),
+                      rb.height > 0.6 * ra.height, rb.height < 1.6 * ra.height,
+                      o.all || similarity(normalizedForMatch(a.text), normalizedForMatch(b.text)) >= 0.6
+                else { continue }
+                let from = a.last + extend + 1, to = min(b.first - extend - 1, n - 1)
+                if from <= to {
+                    for f in from...to {
+                        add(rels, line: lerp(ra, rb, CGFloat(f - a.last) / CGFloat(b.first - a.last)), at: f)
+                    }
                 }
+                break  // the nearest continuation is enough
             }
         }
         // Words also count for entries that are hidden as a whole line.
@@ -236,6 +273,7 @@ public func analyzeText(
         tracks[k].text = mostCommonReading(tracks[k])
         tracks[k].parts = kindParts(tracks[k], size: info.size)
     }
+    addAddressContinuations(&tracks)
     // One entry per distinct text, in order of first appearance.
     var groups: [String: [Int]] = [:]
     var order: [String] = []
@@ -363,6 +401,32 @@ private func kindParts(_ t: TextTrack, size: CGSize) -> [TextKind: [CGRect]] {
     return out.mapValues(mergeOverlapping)
 }
 
+/// An address often continues on the next line (building name, room number) that matches no
+/// pattern by itself: hide the whole line right below a line with an address, in the same
+/// column (same left edge, similar height, line spacing apart). Only one line further, from
+/// lines whose own text matched, so a long paragraph is not swallowed.
+private func addAddressContinuations(_ tracks: inout [TextTrack]) {
+    let owners = tracks.indices.filter { tracks[$0].parts[.address] != nil }
+    guard !owners.isEmpty else { return }
+    let frames = tracks.map { Set($0.sampleFrames) }
+    for a in owners {
+        for b in tracks.indices where b != a && tracks[b].parts[.address] != [whole] {
+            guard let f = tracks[a].sampleFrames.first(where: { frames[b].contains($0) }),
+                  let ra = tracks[a].samples.first(where: { $0.frame == f })?.rect,
+                  let rb = tracks[b].samples.first(where: { $0.frame == f })?.rect
+            else { continue }
+            let h = ra.height
+            let gap = ra.minY - rb.maxY  // Core Image coordinates: y grows upward
+            guard gap > -0.3 * h, gap < 0.8 * h, abs(rb.minX - ra.minX) < 1.5 * h,
+                  rb.height > 0.7 * h, rb.height < 1.4 * h
+            else { continue }
+            tracks[b].parts[.address] = [whole]
+        }
+    }
+}
+
+private let whole = CGRect(x: 0, y: 0, width: 1, height: 1)
+
 /// Box of a character range relative to the line box.
 private func relativeBox(_ s: TextSample, range: Range<String.Index>, size: CGSize) -> CGRect? {
     guard let box = try? s.text?.boundingBox(for: range) else { return nil }
@@ -394,7 +458,7 @@ private let patterns: [(TextKind, NSRegularExpression)] = {
         (.email, "[A-Za-z0-9._%+\\-]+\\s?[@＠]\\s?[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}"),
         (.url, "(?:https?://|www\\.)[^\\s　]+"),
         (.url, "[A-Za-z0-9\\-]+(?:\\.[A-Za-z0-9\\-]+)*\\.(?:com|net|org|jp|io|me|info|biz|co|app|dev)(?:/[^\\s　]*)?"),
-        (.number, "\(digit)(?:\(digit)|\(sep)){4,}\(digit)"),
+        (.number, "(?:(?<![A-Za-zＡ-Ｚａ-ｚ])[A-Za-zＡ-Ｚａ-ｚ]{1,4}[\\-‐－]?)?\(digit)(?:\(digit)|\(sep)){4,}\(digit)"),
         (.address, "〒\\s?\(digit){3}[\\-‐－ーｰ−]\(digit){4}|(?<![0-9０-９\\-‐－ーｰ−])\(digit){3}[\\-‐－ーｰ−]\(digit){4}(?![0-9０-９\\-‐－ーｰ−])"),
         (.address, "(?:東京都|北海道|(?:京都|大阪)府|[^\\s　、。]{2,3}県)[^\\s　、。]*"),
         (.address, "[^\\s　、。]{1,6}[市区町村郡][^\\s　、。]*[0-9０-９一二三四五六七八九十丁目番地号][^\\s　、。]*"),
@@ -410,7 +474,9 @@ func findKinds(in s: String) -> [(TextKind, Range<String.Index>)] {
         for m in re.matches(in: s, range: ns) {
             guard let r = Range(m.range, in: s) else { continue }
             if kind == .number && s[r].filter(\.isNumber).count < 6 { continue }
-            out.append((kind, r))
+            // The rest of the line after the start of an address is still the address
+            // (ward, town, building); the patterns stop at the first unusual character.
+            out.append((kind, kind == .address ? r.lowerBound..<s.endIndex : r))
         }
     }
     return out
@@ -431,7 +497,7 @@ func wordRanges(in s: String, words: [String]) -> [Range<String.Index>] {
         var k = 0
         while k + wc.count <= chars.count {
             if Array(chars[k..<(k + wc.count)]) == wc {
-                out.append(index[k]..<s.index(after: index[k + wc.count - 1]))
+                out.append(index[k]..<withFollowingName(s, after: s.index(after: index[k + wc.count - 1])))
                 k += wc.count
             } else {
                 k += 1
@@ -439,6 +505,42 @@ func wordRanges(in s: String, words: [String]) -> [Range<String.Index>] {
         }
     }
     return out
+}
+
+/// A family name is usually followed by the given name ("鈴木 次郎", "佐藤一郎"): extend a word
+/// over an optional space and up to 4 kanji or katakana. Hiragana (particles, さん) stops it.
+private func withFollowingName(_ s: String, after end: String.Index) -> String.Index {
+    var i = end
+    while i < s.endIndex, s[i].isWhitespace { i = s.index(after: i) }
+    var out = end, n = 0
+    while i < s.endIndex, n < 4, isNameCharacter(s[i]) {
+        i = s.index(after: i)
+        out = i
+        n += 1
+    }
+    return out
+}
+
+private func isNameCharacter(_ c: Character) -> Bool {
+    guard let u = c.unicodeScalars.first, c.unicodeScalars.count == 1 else { return false }
+    switch u.value {
+    case 0x4E00...0x9FFF, 0x3400...0x4DBF, 0xF900...0xFAFF, 0x3005: return true  // kanji, 々
+    case 0x30A1...0x30FA, 0x30FC: return true  // katakana, ー
+    default: return false
+    }
+}
+
+extension Array where Element == Int {
+    /// First index whose element satisfies `pred` (the array is sorted so that `pred` is
+    /// false, then true).
+    func partitionIndex(_ pred: (Int) -> Bool) -> Int {
+        var lo = 0, hi = count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if pred(self[mid]) { hi = mid } else { lo = mid + 1 }
+        }
+        return lo
+    }
 }
 
 func normalizedForMatch(_ s: String) -> String {

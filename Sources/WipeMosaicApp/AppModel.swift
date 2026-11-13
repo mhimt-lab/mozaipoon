@@ -610,10 +610,17 @@ final class AppModel {
 
     private func updateTextMask(_ v: VideoItem) {
         guard let text = v.text else { return }
-        let o = TextMaskOptions(kinds: textKinds, words: textWords, lines: v.textLines)
+        let o = TextMaskOptions(kinds: textKinds, words: textWords, lines: v.textLines, all: v.textAll)
         v.textOptions = o
         v.textMask = text.mask(o)
         if v.id == currentID { refreshLive() }
+    }
+
+    /// Hide every line that was read in the current video, or go back to the choices.
+    func setTextAll(_ on: Bool) {
+        guard let v = current, v.textAll != on else { return }
+        v.textAll = on
+        updateTextMask(v)
     }
 
     /// Hide or show a whole line of the current video (undoable).
