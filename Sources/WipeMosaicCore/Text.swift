@@ -453,9 +453,20 @@ private func mostCommonReading(_ t: TextTrack) -> String {
     return count.max { $0.value < $1.value || ($0.value == $1.value && $0.key > $1.key) }!.key
 }
 
-/// One sample per distinct reading of the line (readings differ when recognition errs).
+/// One sample per distinct reading of the line (readings differ when recognition errs), the
+/// one with the recognized text (for the boxes of character ranges) when there is one.
 private func distinctReadings(_ t: TextTrack) -> [TextSample] {
-    t.samples.filter { $0.text != nil }
+    var out: [TextSample] = []
+    var at: [String: Int] = [:]
+    for s in t.samples {
+        if let i = at[s.string] {
+            if out[i].text == nil, s.text != nil { out[i] = s }
+        } else {
+            at[s.string] = out.count
+            out.append(s)
+        }
+    }
+    return out
 }
 
 /// Parts of the line to hide per kind. Every reading is checked, so a line is covered for its
@@ -476,9 +487,9 @@ private func kindParts(_ t: TextTrack, size: CGSize) -> [TextKind: [CGRect]] {
 /// point ("hanako.yamada@" / "example.com", "example" / ".com/yamada", "sato.ichi" /
 /// "ro@example.jp", "080-0000-" / "2222"). Only one line further, from lines whose own text
 /// matched, so a long paragraph is not swallowed.
-/// - the line below an address, in the same column: the whole line
+/// - the line below an address: the whole line
 /// - two lines whose last and first words, joined, make an email address, URL or number
-///   across the join: both words. The lower line may be indented (a value column).
+///   across the join: both words
 private func addContinuations(_ tracks: inout [TextTrack], times: [Double], extend: Double, bounds: CGRect, size: CGSize) {
     let readings = tracks.map(distinctReadings)
     let lasts: [[(TextSample, Range<String.Index>)]] = readings.map { $0.compactMap { s in trailingWord(s.string).map { (s, $0) } } }
@@ -491,7 +502,7 @@ private func addContinuations(_ tracks: inout [TextTrack], times: [Double], exte
         for b in tracks.indices where b != a && (address || !firsts[b].isEmpty) {
             // On screen at the same time (cheap, before comparing words or places).
             guard ta0 <= times[tracks[b].last], times[tracks[b].first] <= ta1 else { continue }
-            if address, isLine(tracks[b], below: tracks[a], times: times, extend: extend, bounds: bounds, indented: false) {
+            if address, isLine(tracks[b], below: tracks[a], times: times, extend: extend, bounds: bounds) {
                 changes.append((b, .address, [whole]))
             }
             guard !lasts[a].isEmpty, !firsts[b].isEmpty else { continue }
@@ -501,7 +512,7 @@ private func addContinuations(_ tracks: inout [TextTrack], times: [Double], exte
                     if let kind = wrappedKind(String(sa.string[ra]), String(sb.string[rb])) { found.append((kind, sa, ra, sb, rb)) }
                 }
             }
-            guard !found.isEmpty, isLine(tracks[b], below: tracks[a], times: times, extend: extend, bounds: bounds, indented: true)
+            guard !found.isEmpty, isLine(tracks[b], below: tracks[a], times: times, extend: extend, bounds: bounds)
             else { continue }
             for (kind, sa, ra, sb, rb) in found {
                 changes.append((a, kind, [relativeBox(sa, range: ra, size: size) ?? whole]))
@@ -514,9 +525,9 @@ private func addContinuations(_ tracks: inout [TextTrack], times: [Double], exte
     }
 }
 
-/// Letters, digits and the symbols of addresses, URLs and numbers; "@" may have spaces
-/// around it as read ("hanako.yamada @").
-private let wordChars = "(?:[A-Za-z0-9０-９._%+\\-‐－ー−/?=&#~:]|\\s?[@＠]\\s?)+"
+/// Letters, digits, brackets and the symbols of addresses, URLs and numbers; "@" may have
+/// spaces around it as read ("hanako.yamada @"), and so may groups of digits ("090 12").
+private let wordChars = "(?:[A-Za-z0-9０-９._%+\\-‐－ー−/?=&#~:()（）\\[\\]]|\\s?[@＠]\\s?|(?<=[0-9０-９)）])\\s(?=[0-9０-９(（]))+"
 
 /// The first word of letters, digits and symbols of a line.
 func leadingWord(_ s: String) -> Range<String.Index>? {
@@ -540,25 +551,19 @@ func wrappedKind(_ upper: String, _ lower: String) -> TextKind? {
     guard !u.isEmpty, !l.isEmpty else { return nil }
     let joined = u + l
     let join = joined.index(joined.startIndex, offsetBy: u.count)
-    for kind in [TextKind.email, .url, .number] {
-        for (k, r) in findKinds(in: joined) where k == kind && r.lowerBound < join && r.upperBound > join {
-            return kind
-        }
-    }
-    return nil
+    let crossing = findKinds(in: joined).filter { $0.1.lowerBound < join && $0.1.upperBound > join }.map(\.0)
+    return [TextKind.email, .url, .number].first(where: crossing.contains)
 }
 
 /// `b` is the next line under `a`, at a frame where both are on screen (each continued
 /// `extend` seconds, as when hidden): one where both were read if there is one, else one
 /// where either was read (the other's place interpolated, or held where it was read: while
-/// scrolling, two lines read once each at different frames are not matched). Same left edge,
-/// or with `indented` anywhere under `a` (a wrapped value in a column of values).
-private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend: Double, bounds: CGRect, indented: Bool) -> Bool {
+/// scrolling, two lines read once each at different frames are not matched). Starting under
+/// `a` (a wrapped value in a column, a centered address) or at most 1.5 lines left of it. Two
+/// lines that were never read together still match within `extend` (glare or a finger may
+/// cover them in turn); a line of the next screen at the same place is hidden too then.
+private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend: Double, bounds: CGRect) -> Bool {
     guard times[a.first] - extend <= times[b.last], times[b.first] - extend <= times[a.last] else { return false }
-    // Both read several times, never at the same time: one screen replaced the other (a lock
-    // screen after the passcode screen), they were not shown together. A line read only once
-    // (fast scrolling, glare) still counts with `extend`.
-    if a.samples.count > 1, b.samples.count > 1, a.last < b.first || b.last < a.first { return false }
     let fa = Set(a.sampleFrames), fb = Set(b.sampleFrames)
     let both = fa.intersection(fb)
     for f in both.sorted() + fa.symmetricDifference(fb).sorted() {
@@ -567,7 +572,7 @@ private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend:
         else { continue }
         let h = ra.height
         let gap = ra.minY - rb.maxY  // Core Image coordinates: y grows upward
-        let column = indented ? rb.minX > ra.minX - 1.5 * h && rb.minX < ra.maxX : abs(rb.minX - ra.minX) < 1.5 * h
+        let column = rb.minX > ra.minX - 1.5 * h && rb.minX < ra.maxX
         if gap > -0.3 * h, gap < 0.8 * h, column, rb.height > 0.7 * h, rb.height < 1.4 * h {
             return true
         }
@@ -791,19 +796,27 @@ func selfCheckMask() -> [String] {
     var tracks2 = [once, onceBelow]
     addContinuations(&tracks2, times: times, extend: 0.35, bounds: bounds, size: size)
     expect(tracks2[1].parts[.address] != nil, "address: lines read once at different frames")
-    // A line that left just before the address appeared at the same place (passcode screen →
-    // lock screen) was never shown with it.
-    var later = TextTrack(id: 0, samples: [
-        TextSample(frame: 20, rect: CGRect(x: 100, y: 600, width: 120, height: 40), string: "東京都", text: nil),
-        TextSample(frame: 30, rect: CGRect(x: 100, y: 600, width: 120, height: 40), string: "東京都", text: nil),
-    ])
-    later.parts = [.address: [CGRect(x: 0, y: 0, width: 1, height: 1)]]
-    let before = TextTrack(id: 1, samples: [
-        TextSample(frame: 10, rect: CGRect(x: 100, y: 550, width: 500, height: 40), string: "パスコードを入力", text: nil),
-        TextSample(frame: 17, rect: CGRect(x: 100, y: 550, width: 500, height: 40), string: "パスコードを入力", text: nil),
-    ])
-    var tracks3 = [later, before]
+    // Two lines shown together but read at different frames (glare, a finger), each read
+    // twice: still the line below.
+    var upper = track(0, 10...11, y: 600, "東京都みほん区")
+    upper.parts = [.address: [whole]]
+    var tracks3 = [upper, track(1, 12...13, y: 555, "テストハイツ402")]
     addContinuations(&tracks3, times: times, extend: 0.35, bounds: bounds, size: size)
-    expect(tracks3[1].parts[.address] == nil, "address: a line gone before the address appeared is not hidden")
+    expect(tracks3[1].parts[.address] != nil, "address: lines shown together, read at different frames")
+    // A centered address (an order screen): the shorter line below is not left-aligned.
+    var centered = [upper, track(1, 10...11, y: 555, "テストハイツ402", x: 300)]
+    addContinuations(&centered, times: times, extend: 0.35, bounds: bounds, size: size)
+    expect(centered[1].parts[.address] != nil, "address: centered line below")
+    // Wrapped email address, URL and number through addContinuations (no recognized text:
+    // the words are hidden with whole-line boxes).
+    for (u, l) in [("共有先は example", ".com/private/yamada"), ("電話は 080-0000-", "2222 です"),
+                   ("メールは sato.ichi", "ro@example.jp です")] {
+        var w = [track(0, 0...10, y: 600, u), track(1, 0...10, y: 555, l, x: 140)]
+        addContinuations(&w, times: times, extend: 0.35, bounds: bounds, size: size)
+        expect(!w[0].parts.isEmpty && !w[1].parts.isEmpty, "wrap through addContinuations: \(u) / \(l)")
+    }
+    var plain = [track(0, 0...10, y: 600, "よろしくお願いします"), track(1, 0...10, y: 555, "はい")]
+    addContinuations(&plain, times: times, extend: 0.35, bounds: bounds, size: size)
+    expect(plain[0].parts.isEmpty && plain[1].parts.isEmpty, "wrap: ordinary lines are not hidden")
     return failures
 }
