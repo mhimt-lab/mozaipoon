@@ -58,6 +58,7 @@ func runMosaic(_ o: RunOptions) async throws {
     if o.common.screenText {
         print("pass 1/2: reading on-screen text")
         let text = try analyzeText(asset: asset, info: info, progress: report)
+        try checkLines(o.common.textLines, in: text)
         let options = TextMaskOptions(kinds: o.common.textKinds, words: o.common.textWords, lines: o.common.textLines, all: o.common.textAll)
         let mask = text.mask(options)
         frames = withText(frames, text: text, mask: mask)
@@ -189,6 +190,13 @@ func writeFrame(input: URL, at: Double, output: URL) async throws {
     try writePNG(cg, to: output)
 }
 
+/// `--lines` numbers must be lines of this video (they change when the video differs).
+func checkLines(_ lines: Set<Int>, in text: ScreenText) throws {
+    let unknown = lines.subtracting(text.entries.map(\.id))
+    guard unknown.isEmpty else {
+        throw ToolError("no such line: \(unknown.sorted()) (found \(text.entries.count); see `wipe-mosaic text <input> --list`)")
+    }
+}
 
 func listText(input: URL, options: TextMaskOptions, list: Bool) async throws {
     guard FileManager.default.fileExists(atPath: input.path) else { throw ToolError("input not found: \(input.path)") }
@@ -197,6 +205,7 @@ func listText(input: URL, options: TextMaskOptions, list: Bool) async throws {
     let started = Date()
     let text = try analyzeText(asset: asset, info: info) { _ in }
     let elapsed = Date().timeIntervalSince(started)
+    try checkLines(options.lines, in: text)
     let mask = text.mask(options)
     let recognized = Set(text.tracks.flatMap { t in t.sampleFrames }).count
     print(String(format: "text: %d lines (%d tracks), %d frames, recognized %d frames, %.1fs", text.entries.count,

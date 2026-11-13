@@ -117,7 +117,7 @@ extension Command {
         var overwrite = false, progress = false
         var photos: [URL] = []
         var match: URL?
-        var tilesGiven = false, holdGiven = false
+        var tilesGiven = false, holdGiven = false, textOption = false
         var list = false
 
         var it = args.dropFirst().makeIterator()
@@ -126,6 +126,7 @@ extension Command {
             return v
         }
         while let a = it.next() {
+            if ["--text-kinds", "--words", "--lines", "--all-text"].contains(a) { textOption = true }
             switch a {
             case "--wipe": c.wipes.append(try parseRect(try value(a)))
             case "--people":
@@ -206,6 +207,9 @@ extension Command {
         default: break
         }
 
+        guard !textOption || c.screenText else {
+            throw ToolError("--text-kinds, --words, --lines and --all-text need --screen-text")
+        }
         guard c.wipes.isEmpty != (c.people.isEmpty && !c.screenText) else {
             throw ToolError("use either --wipe, or --people and/or --screen-text")
         }
