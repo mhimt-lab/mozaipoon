@@ -174,10 +174,16 @@ private struct ExportRow: View {
                         warning(skipped)
                     }
                     if video.canExport, case let people = model.seeThroughStickers(video), !people.isEmpty {
-                        let names = people.map { "人物 \($0.person)" }.joined(separator: "、")
-                        warning(people.allSatisfy(\.fixedByLarger)
-                            ? "\(names)のスタンプでは、顔の一部が見えます。「隠し方の調整」の「スタンプの大きさ」を上げてください"
-                            : "\(names)のスタンプは、顔に重なる所に透明や半透明の部分があり、顔が透けて見えます。別の画像にしてください")
+                        // Each cause with its own fix (a larger size does not fill a hole).
+                        let larger = people.filter(\.fixedByLarger).map { "人物 \($0.person)" }.joined(separator: "、")
+                        let other = people.filter { !$0.fixedByLarger }.map { "人物 \($0.person)" }.joined(separator: "、")
+                        let base = model.coverStyle == .blur ? "ぼかし" : "モザイク"
+                        if !larger.isEmpty {
+                            warning("\(larger)のスタンプは顔がはみ出すので、下にも\(base)をかけて書き出します。スタンプだけで隠すには「スタンプの大きさ」を上げてください")
+                        }
+                        if !other.isEmpty {
+                            warning("\(other)のスタンプは透明や半透明の部分から顔が透けるので、下にも\(base)をかけて書き出します。スタンプだけで隠すには、透明な部分のない画像にしてください")
+                        }
                     }
                     if video.canExport, let a = video.analysis, !a.people.isEmpty, video.selected.isEmpty {
                         warning("顔が\(a.people.count)人見つかりましたが、誰も選んでいません（顔は隠れません）")

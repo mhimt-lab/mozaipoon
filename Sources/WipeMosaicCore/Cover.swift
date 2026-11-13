@@ -194,7 +194,15 @@ public final class Sticker: @unchecked Sendable {
     public func coversCore(scale: Double) -> Bool { covered(scale: scale, radius: 0.6) >= 1 }
 
     /// Part of the face shows through or around the image at `scale`.
-    public func showsFace(scale: Double) -> Bool { coverage(scale: scale) < Self.minCoverage || !coversCore(scale: scale) }
+    public func showsFace(scale: Double) -> Bool {
+        // Remembered per scale: checked for every frame drawn.
+        if let known = showsLock.withLock({ shows[scale] }) { return known }
+        let v = coverage(scale: scale) < Self.minCoverage || !coversCore(scale: scale)
+        showsLock.withLock { shows[scale] = v }
+        return v
+    }
+    private var shows: [Double: Bool] = [:]
+    private let showsLock = NSLock()
 
     /// The image placed over `face`, ready to composite over the frame.
     func drawn(over face: CGRect, scale: Double) -> CIImage {
@@ -214,9 +222,14 @@ public final class Sticker: @unchecked Sendable {
 public func applyCover(
     _ img: CIImage, rects: [CGRect], stickers: [StickerBox], render: RenderSettings, block: CGFloat
 ) -> CIImage {
-    // Under a sticker whose face was not detected in this frame, and for a face whose
-    // sticker is missing, the mosaic (or blur) with the usual margin: never a bare face.
-    let under = stickers.filter { $0.estimated || render.stickers[$0.person] == nil }.map { padded($0.rect, render.pad) }
+    // The mosaic (or blur) with the usual margin goes under a sticker whose face was not
+    // detected in this frame, under one that lets part of the face show (a hole, a
+    // half-transparent part, too small), and for a face whose sticker is missing: never a
+    // bare face. Only an image that covers the face hides it alone.
+    let under = stickers.filter { s in
+        guard let sticker = render.stickers[s.person] else { return true }
+        return s.estimated || sticker.showsFace(scale: render.stickerScale)
+    }.map { padded($0.rect, render.pad) }
     let all = rects + under
     var out = render.style == .blur ? applyBlur(img, rects: all, block: block) : applyMosaic(img, rects: all, block: block)
     for s in stickers {
@@ -298,7 +311,7 @@ func steadyBoxes(_ boxes: [CGRect?], centreFrames: Int, sizeFrames: Int, marginF
 /// The face moved too far or changed size too much in one frame to be the same shot
 /// (the distance is the one used to link detections into tracks).
 private func isJump(_ a: CGRect, _ b: CGRect) -> Bool {
-    let size = max(a.width, a.height, b.width, b.height)
-    let ratio = max(a.width, b.width) / max(1, min(a.width, b.width))
-    return hypot(a.midX - b.midX, a.midY - b.midY) > 0.75 * size || ratio > 1.5
+    let sa = max(a.width, a.height), sb = max(b.width, b.height)
+    let ratio = max(sa, sb) / max(1, min(sa, sb))
+    return hypot(a.midX - b.midX, a.midY - b.midY) > 0.75 * max(sa, sb) || ratio > 1.5
 }

@@ -276,7 +276,8 @@ private struct PersonRow: View {
         let similar = person.similar
         let registered = !checked && video.registeredHints[person.id] != nil
         let other = checked ? nil : video.crossHints[person.id]
-        // Whether part of the face shows through or around the sticker (no mosaic under it).
+        // Whether part of the face shows through or around the sticker (then the base cover
+        // is drawn under it too).
         let sticker = checked ? stickerItem?.sticker : nil
         let seeThrough = sticker?.showsFace(scale: model.stickerScale) ?? false
         if !similar.isEmpty || registered || other != nil || seeThrough {
@@ -284,10 +285,11 @@ private struct PersonRow: View {
                 if let sticker, seeThrough {
                     // Raising the size only helps when the face is beside the image, not
                     // when it shows through a hole or a half-transparent part.
+                    let base = model.coverStyle == .blur ? "ぼかし" : "モザイク"
                     Badge(
                         text: sticker.showsFace(scale: 2.0)
-                            ? "顔に重なる所に透明や半透明の部分があり、顔が透けて見えます。別の画像にしてください"
-                            : "この大きさでは顔の一部が見えます。「隠し方の調整」の「スタンプの大きさ」を上げてください",
+                            ? "画像から顔が透けるので、下にも\(base)をかけます。透明な部分のない画像なら、スタンプだけで隠せます"
+                            : "顔がはみ出すので、下にも\(base)をかけます。「スタンプの大きさ」を上げると、スタンプだけで隠せます",
                         systemImage: "eye.trianglebadge.exclamationmark")
                 }
                 if !similar.isEmpty {
@@ -529,7 +531,7 @@ private struct MosaicSection: View {
                     if model.current.map({ !model.activeStickers($0).isEmpty }) == true {
                         SliderRow(title: "スタンプの大きさ", value: $model.stickerScale, range: 0.8...2.0, step: 0.05,
                                   low: "小さい", high: "大きい", text: "\(Int((model.stickerScale * 100).rounded()))%",
-                                  note: "顔の写真は、写真の顔を動画の顔に合わせて重ねます。背景を透明にした切り抜き画像がおすすめです。スタンプの周りから、髪型や頭の輪郭は見えます。顔が見つからない場面では、スタンプの下にもモザイク（ぼかし）をかけます。")
+                                  note: "顔の写真は、写真の顔を動画の顔に合わせて重ねます。背景を透明にした切り抜き画像がおすすめです。スタンプの周りから、髪型や頭の輪郭は見えます。顔が見つからない場面や、画像から顔が透けるときは、スタンプの下にもモザイク（ぼかし）をかけます。")
                     }
                     SliderRow(title: "顔の前後も続ける時間", value: $model.hold, range: 0...3, step: 0.25,
                               low: "0秒", high: "3秒", text: String(format: "%.2g秒", model.hold),
@@ -641,7 +643,7 @@ private struct CoverMenu: View {
             Divider()
             Button("画像を選んでスタンプにする…") { model.chooseStickerImage(for: person) }
             if !model.stickerLibrary.isEmpty {
-                Menu("スタンプを削除") {
+                Menu("保存したスタンプを削除") {
                     ForEach(Array(model.stickerLibrary.enumerated()), id: \.element.id) { i, item in
                         Button {
                             model.stickerToRemoveFromMenu = item

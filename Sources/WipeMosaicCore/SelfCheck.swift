@@ -1,3 +1,4 @@
+import CoreImage
 import CoreGraphics
 import Foundation
 
@@ -198,6 +199,22 @@ func selfCheckCover() -> [String] {
     } else { failures.append("disc sticker could not be made") }
     if let ring, let s = try? Sticker(cgImage: ring) {
         expect(s.coverage(scale: 1.2) < 0.9, "ring leaves the face visible: \(s.coverage(scale: 1.2))")
+        // Drawn over a fine checkerboard "face": the hole must show the mosaic (one flat
+        // block), not the bare face (alternating pixels), even where the face was detected.
+        let checker = CIFilter(name: "CICheckerboardGenerator", parameters: [
+            "inputWidth": 2, "inputColor0": CIColor.black, "inputColor1": CIColor.white,
+            kCIInputCenterKey: CIVector(x: 0, y: 0),
+        ])!.outputImage!.cropped(to: CGRect(x: 0, y: 0, width: 400, height: 400))
+        var render = RenderSettings()
+        render.stickers = [1: s]
+        let out = applyCover(
+            checker, rects: [], stickers: [StickerBox(rect: CGRect(x: 150, y: 150, width: 100, height: 100), person: 1, estimated: false)],
+            render: render, block: 20)
+        var px = [UInt8](repeating: 0, count: 4 * 4 * 4)
+        CIContext().render(out, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: 198, y: 198, width: 4, height: 4),
+                           format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        let reds = Set(stride(from: 0, to: px.count, by: 4).map { px[$0] })
+        expect(reds.count == 1, "the hole of a ring sticker is hidden under it: \(reds.count) values in 4×4 px")
     } else { failures.append("ring sticker could not be made") }
     // Half-transparent: the face shows through even though every pixel is "there".
     let glass = image {

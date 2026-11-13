@@ -144,7 +144,7 @@ private struct StickerSettings: View {
         Form {
             Section {
                 if model.stickerLibrary.isEmpty {
-                    Text("まだありません。右の一覧で隠す人の「隠し方」から画像を選ぶと、ここに並びます。")
+                    Text("まだありません。メイン画面の人の一覧で、隠す人の「隠し方」メニューから画像を選ぶと、ここに並びます。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
@@ -175,7 +175,7 @@ private struct StickerSettings: View {
             } footer: {
                 Text(model.stickerLibrary.isEmpty
                      ? "画像はこのMacの中だけに保存され、どこにも送信されません。"
-                     : "削除すると、使っていた人は基本の隠し方（モザイクかぼかし）に戻ります。削除は取り消せません。右の一覧の「隠し方」メニューの「スタンプを削除」からも削除できます。画像はこのMacの中だけに保存され、どこにも送信されません。")
+                     : "削除すると、使っていた人は基本の隠し方（モザイクかぼかし）に戻ります。削除は取り消せません。メイン画面の人の一覧の「隠し方」メニューの「保存したスタンプを削除」からも削除できます。画像はこのMacの中だけに保存され、どこにも送信されません。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -189,8 +189,9 @@ private struct StickerSettings: View {
 extension View {
     /// Asks before deleting a sticker (it cannot be undone, and every video using it loses it).
     func stickerRemovalDialog(model: AppModel, item: Binding<StickerItem?>) -> some View {
-        confirmationDialog(
-            "このスタンプを削除しますか？",
+        let number = item.wrappedValue.flatMap { s in model.stickerLibrary.firstIndex { $0.id == s.id } }.map { $0 + 1 }
+        return confirmationDialog(
+            number.map { "スタンプ \($0) を削除しますか？" } ?? "このスタンプを削除しますか？",
             isPresented: Binding(get: { item.wrappedValue != nil }, set: { if !$0 { item.wrappedValue = nil } }),
             presenting: item.wrappedValue
         ) { s in
@@ -199,8 +200,8 @@ extension View {
         } message: { s in
             let users = model.videos.filter { $0.stickers.values.contains(s.id) }.count
             Text(users > 0
-                 ? "\(users)本の動画で使っています。使っていた人は、基本の隠し方（モザイクかぼかし）に戻ります。削除は取り消せません。"
-                 : "削除は取り消せません。")
+                 ? "\(users)本の動画で使っています。使っていた人は、基本の隠し方（モザイクかぼかし）に戻ります。削除は取り消せず、それまでの操作も取り消せなくなります。"
+                 : "削除は取り消せず、それまでの操作も取り消せなくなります。")
         }
     }
 }

@@ -31,8 +31,8 @@ func runMosaic(_ o: RunOptions) async throws {
                      s.coverage(scale: scale) * 100, s.coversCore(scale: scale) ? "" : " (not all of the eyes, nose and mouth)"))
         if s.showsFace(scale: scale) {
             print(s.showsFace(scale: 4)
-                  ? "  warning: the face shows through this image (transparent or half-transparent parts); use another image"
-                  : "  warning: part of the face shows around this image; raise --sticker-scale")
+                  ? "  note: the face shows through this image (transparent or half-transparent parts), so it is also hidden under it; use an opaque image to hide it with the image alone"
+                  : "  note: part of the face shows around this image, so it is also hidden under it; raise --sticker-scale to hide it with the image alone")
         }
         print("  hair, ears and the outline of the head can still show around a sticker")
     }

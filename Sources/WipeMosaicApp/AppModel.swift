@@ -96,6 +96,7 @@ final class AppModel {
     var stickerToRemoveFromMenu: StickerItem?
     /// Deleted while the library was still loading: the load read them before.
     private var removedStickers: Set<UUID> = []
+    private var loadingStickers = true
     /// The person waiting for an image from the file dialog.
     var stickerTarget: Int?
     var importingSticker = false
@@ -206,6 +207,7 @@ final class AppModel {
                 let saved = items.filter { !model.removedStickers.contains($0.id) }
                 model.stickerLibrary = saved + model.stickerLibrary.filter { s in !saved.contains { $0.id == s.id } }
                 model.removedStickers = []
+                model.loadingStickers = false
                 model.refreshLive()
             }
         }
@@ -411,7 +413,7 @@ final class AppModel {
         do {
             try StickerStore.delete(item.id)
             stickerLibrary.removeAll { $0.id == item.id }
-            removedStickers.insert(item.id)
+            if loadingStickers { removedStickers.insert(item.id) }
             for v in videos where v.stickers.values.contains(item.id) {
                 v.stickers = v.stickers.filter { $0.value != item.id }
                 if v.id == currentID { refreshLive() }

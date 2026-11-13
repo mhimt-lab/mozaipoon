@@ -78,8 +78,8 @@ let usage = """
       --style <s>          How faces and text are hidden: mosaic (default) or blur
       --sticker <n>=<img>  People: cover person n's face with this image instead (e.g. a cut-out
                            face photo; a face in the image is laid over the face). Repeatable.
-                           Use an opaque image: where a face is detected there is no mosaic under it
-                           (only where the face is estimated), so a see-through part shows the face.
+                           The mosaic (or blur) is also drawn under it where the face is estimated, and
+                           everywhere when the face would show through or around the image.
       --sticker-scale <x>  Sticker size relative to the face (default 1.2)
       --tiles <n>          Also detect on an n x n grid for small faces (default: people 4, wipe 3; 1 = off)
       --hold <seconds>     Keep the mosaic before/after a face is seen (default: people 1.0, wipe 0.3)
