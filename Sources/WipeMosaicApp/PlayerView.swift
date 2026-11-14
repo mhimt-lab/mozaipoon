@@ -145,9 +145,7 @@ struct ViewerView: View {
                 .overlay { textBoxes }
                 .overlay { faceBoxes }
                 .overlay { zoomNavigator }
-                .overlay { analysisCard }
-                .overlay(alignment: .top) { hint }
-                .overlay(alignment: .topTrailing) { boxToggle }
+                .overlay(alignment: .bottom) { analysisCard }
             TransportBar(model: model, video: video)
         }
     }
@@ -159,9 +157,14 @@ struct ViewerView: View {
             let shown = shownVideo(geo.size)
             let s = shown.width / videoSize.width
             let viewer = CGRect(origin: .zero, size: geo.size)
+            let stickered = Set(model.activeStickers(video).keys)
             GlassEffectContainer {
                 ForEach(Array(model.visibleFaces.enumerated()), id: \.offset) { _, face in
-                    let r = face.rect  // Core Image coordinates (bottom-left origin)
+                    // A hidden face's box is drawn where the mosaic or blur reaches (the face
+                    // widened by 隠す広さ), so the box shows what gets covered. A sticker keeps
+                    // the face's box: its own shape decides what it covers.
+                    let widened = video.selected.contains(face.person) && !stickered.contains(face.person)
+                    let r = widened ? padded(face.rect, model.pad) : face.rect  // Core Image coordinates (bottom-left origin)
                     let box = CGRect(
                         x: shown.minX + r.minX * s, y: shown.minY + (videoSize.height - r.maxY) * s,
                         width: r.width * s, height: r.height * s)
@@ -210,7 +213,7 @@ struct ViewerView: View {
                     HStack(spacing: 8) {
                         ZStack(alignment: .topLeading) {
                             // The same player drawn small: the same picture as the viewer (with
-                            // the mosaic in "モザイクあり"), nothing more.
+                            // the mosaic in "隠した表示"), nothing more.
                             MiniPlayerView(player: model.player)
                                 .clipShape(.rect(cornerRadius: 3))
                             // Outside the part in view darkened, the part itself outlined.
@@ -255,17 +258,20 @@ struct ViewerView: View {
 
     // MARK: Text boxes
 
-    /// Dashed outlines where text is hidden (not written to the file).
+    /// Dashed outlines where text is hidden (not written to the file). Boxes that overlap or
+    /// touch (the words of one line) are outlined as one shape, not as doubled edges.
     private var textBoxes: some View {
         GeometryReader { geo in
             let shown = shownVideo(geo.size)
             let s = shown.width / videoSize.width
-            ForEach(Array(model.visibleTextBoxes.enumerated()), id: \.offset) { _, r in
-                RoundedRectangle(cornerRadius: 3)
-                    .strokeBorder(Color.orange, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
-                    .frame(width: r.width * s, height: r.height * s)
-                    .position(x: shown.minX + r.midX * s, y: shown.minY + (videoSize.height - r.midY) * s)
+            let outline = model.visibleTextBoxes.reduce(Path()) { path, r in
+                let box = CGRect(
+                    x: shown.minX + r.minX * s, y: shown.minY + (videoSize.height - r.maxY) * s,
+                    width: r.width * s, height: r.height * s)
+                // Widened by a point so boxes a hair apart join too.
+                return path.union(Path(roundedRect: box.insetBy(dx: -1, dy: -1), cornerRadius: 3))
             }
+            outline.stroke(Color.orange, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
         }
         .clipped()
         .allowsHitTesting(false)
@@ -283,6 +289,7 @@ struct ViewerView: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
                 .glassEffect(.regular, in: .capsule)
+                .padding(.bottom, 16)
         } else if let p = video.analyzing {
             VStack(alignment: .leading, spacing: 12) {
                 Label("顔を探しています", systemImage: "faceid")
@@ -301,53 +308,10 @@ struct ViewerView: View {
             .padding(20)
             .frame(width: 320)
             .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            .padding(.bottom, 16)
             .transition(.scale(scale: 0.96).combined(with: .opacity))
             .accessibilityElement(children: .contain)
             .accessibilityLabel("顔を探しています。\(Int(p * 100))パーセント")
-        }
-    }
-
-    // MARK: Face box toggle
-
-    @ViewBuilder
-    private var boxToggle: some View {
-        if video.analysis != nil || video.textMask != nil, model.viewMode != .result {
-            // One switch for the face boxes and the text outlines (both when both are found).
-            Button {
-                model.showFaceBoxes.toggle()
-            } label: {
-                Label(model.showFaceBoxes ? "枠を隠す" : "枠を表示",
-                      systemImage: model.showFaceBoxes ? "person.crop.square" : "person.crop.square.badge.xmark")
-                    .font(.callout)
-            }
-            .buttonStyle(.glass)
-            .padding(12)
-            .help("一時停止中に出る顔の枠と、文字を隠す範囲の枠（橙の点線）を、表示する／隠す（⌘B）。書き出す動画には入りません")
-        }
-    }
-
-    // MARK: Hint
-
-    @ViewBuilder
-    private var hint: some View {
-        if let text = hintText {
-            Label(text.0, systemImage: text.1)
-                .font(.callout)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .glassEffect(.regular, in: .capsule)
-                .padding(.top, 12)
-                .allowsHitTesting(false)
-                .transition(.opacity)
-        }
-    }
-
-    private var hintText: (String, String)? {
-        guard video.analyzing == nil, video.analysis != nil || video.text != nil else { return nil }
-        switch model.viewMode {
-        case .result: return ("書き出し結果（書き出したファイル）を表示しています", "film")
-        case .original: return ("モザイクなし（元の動画）を表示しています", "eye")
-        case .mosaic: return nil
         }
     }
 }
@@ -422,22 +386,50 @@ private struct TransportBar: View {
             .font(.title3)
             // Room for the dip markers above the track (they sit over the bar's top padding).
             .padding(.top, hasDips ? Timeline.dipRow - 10 : 0)
-            if let id = video.focusedPerson, video.scenes[id] != nil {
-                Text(video.selected.contains(id)
-                     ? "青い太線は「人物 \(id)」が映っている場面です（隠す人）。"
-                     : "太線は「人物 \(id)」が映っている場面です（まだ隠していない人）。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            if hasDips {
-                Text("\(Text(Image(systemName: "arrowtriangle.down.fill")).foregroundStyle(.orange))は書き出した動画で確かめてほしい場面です（押すとその場面へ）。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+            // Always one line, so the video does not grow and shrink as a person is chosen.
+            caption
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar)
+    }
+
+    @ViewBuilder
+    private var caption: some View {
+        if let id = video.focusedPerson, video.scenes[id] != nil {
+            Text(video.selected.contains(id)
+                 ? "青い太線は「人物 \(id)」が映っている場面です（隠す人）。"
+                 : "太線は「人物 \(id)」が映っている場面です（まだ隠していない人）。")
+        } else if hasDips {
+            Text("\(Text(Image(systemName: "arrowtriangle.down.fill")).foregroundStyle(.orange))は書き出した動画で確かめてほしい場面です（押すとその場面へ）。")
+        } else {
+            Text(" ").accessibilityHidden(true)
+        }
+    }
+
+    /// One switch for the face boxes and the text outlines (both when both are found). In the
+    /// bar rather than over the video, where it would cover what is being checked.
+    private var boxToggle: some View {
+        let textOnly = video.analysis == nil
+        let enabled = (video.analysis != nil || video.textMask != nil) && model.viewMode != .result
+        return Button {
+            model.showFaceBoxes.toggle()
+        } label: {
+            Label(model.showFaceBoxes ? "枠を隠す" : "枠を表示",
+                  systemImage: textOnly ? "rectangle.dashed" : "person.crop.square")
+                .labelStyle(.iconOnly)
+                // Accent while the boxes show; an explicit style would hide the disabled look.
+                .foregroundStyle(!enabled ? AnyShapeStyle(.tertiary)
+                                 : model.showFaceBoxes ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+        }
+        .disabled(!enabled)
+        .help(model.showFaceBoxes
+              ? "一時停止中に出る顔の枠と、文字を隠す範囲の枠（橙の点線）を隠す（⌘B）。書き出す動画には入りません"
+              : "一時停止中に顔の枠と、文字を隠す範囲の枠（橙の点線）を表示する（⌘B）")
+        .accessibilityValue(model.showFaceBoxes ? "表示中" : "非表示")
     }
 
     private func controls(time: Bool, frame: Bool) -> some View {
@@ -501,6 +493,7 @@ private struct TransportBar: View {
                     .fixedSize()
                     .help("再生の速さ（再生 ▸ 速さ で変えられます）")
             }
+            boxToggle
         }
     }
 }

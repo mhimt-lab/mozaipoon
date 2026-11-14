@@ -67,6 +67,7 @@ private struct VideoRow: View {
                     .truncationMode(.middle)
                 status
                     .font(.callout)
+                    .lineLimit(2)
             }
         }
         .padding(.vertical, 4)
@@ -142,7 +143,7 @@ private struct VideoRow: View {
         switch video.textState {
         case nil:
             if video.purpose == nil {
-                StatusLabel("隠すものを選んでください", systemImage: "questionmark.circle")
+                StatusLabel("隠すものが未選択", systemImage: "questionmark.circle")
             } else {
                 StatusLabel("顔を探していません", systemImage: "pause.circle")
             }

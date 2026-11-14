@@ -25,6 +25,10 @@ struct InspectorView: View {
             .help("画面の文字：画面録画に映る電話番号や名前などを隠します／人の顔：映っている人を選んで隠します")
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            // Opaque, so the rows scrolled under the tabs do not show through.
+            .background(.bar)
+            .overlay(alignment: .bottom) { Divider() }
         }
         .fileImporter(isPresented: $model.importingSticker, allowedContentTypes: [.image]) { result in
             if case .success(let url) = result { model.addSticker(from: url) } else { model.stickerTarget = nil }
@@ -123,6 +127,8 @@ struct InspectorView: View {
                 ForEach(video.orderedPeople) { p in
                     PersonRow(model: model, video: video, person: p)
                         .tag(p.id)
+                        // The line starts under the faces, in line with the menu below them.
+                        .alignmentGuide(.listRowSeparatorLeading) { _ in 26 }
                 }
 
                 if analysis.people.contains(where: { !$0.similar.isEmpty }) || analysis.people.count > 1 {
@@ -233,7 +239,8 @@ private struct PersonRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("人物 \(person.id)")
                         .font(.headline)
-                    Text(on ? "\(hiddenLabel)・\(duration)" : "\(duration)映っています")
+                    // How the face is hidden is shown by the menu under a chosen row.
+                    Text("\(duration)映っています")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -261,10 +268,6 @@ private struct PersonRow: View {
     }
 
     private var stickerItem: StickerItem? { model.sticker(video.stickers[person.id]) }
-
-    private var hiddenLabel: String {
-        stickerItem != nil ? "スタンプ" : model.coverStyle == .blur ? "ぼかしあり" : "モザイクあり"
-    }
 
     private var duration: String {
         let t = video.seconds(of: person)
@@ -366,7 +369,8 @@ private struct FaceStack: View {
     let mosaic: Bool
 
     var body: some View {
-        HStack(spacing: -18) {
+        // Three faces fit the column: 48 + 18 + 18 = 84 pt.
+        HStack(spacing: -30) {
             if images.isEmpty {
                 Image(systemName: "person.crop.circle.fill")
                     .resizable()
@@ -385,7 +389,7 @@ private struct FaceStack: View {
                     .zIndex(Double(3 - i))
             }
         }
-        .frame(width: 80, alignment: .leading)
+        .frame(width: 84, alignment: .leading)
         .accessibilityHidden(true)
     }
 }
@@ -395,6 +399,7 @@ private struct FaceStack: View {
 struct ExportSection: View {
     @Bindable var model: AppModel
     let video: VideoItem
+    static let dipsShown = 5
 
     var body: some View {
         Section {
@@ -431,6 +436,9 @@ struct ExportSection: View {
         } header: {
             SectionTitle("書き出し")
         }
+        // One block without lines: the person rows below carry the list's separators.
+        .listRowSeparator(.hidden)
+        .listSectionSeparator(.hidden)
     }
 
     private var failureReason: String {
@@ -480,8 +488,20 @@ struct ExportSection: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                DisclosureGroup {
-                    ForEach(s.dips) { d in
+                // Not folded: these are the first places to check before publishing.
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("確かめてほしい場面（\(s.dips.count)か所）")
+                        Text("前後より、隠している顔の数が減っています。顔が見えていないか確かめてください。")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(s.dips.prefix(Self.dipsShown)) { d in
                         Button {
                             model.review(d)
                         } label: {
@@ -495,23 +515,19 @@ struct ExportSection: View {
                         .buttonStyle(.plain)
                         .help("書き出した動画のこの場面を表示")
                     }
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("確かめてほしい場面（\(s.dips.count)か所）")
-                            Text("前後より、隠している顔の数が減っています。顔が見えていないか確かめてください。")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    if s.dips.count > Self.dipsShown {
+                        Text("ほか \(s.dips.count - Self.dipsShown) か所（再生バーの▼、再生 ▸ 次の確かめてほしい場面）")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                .padding(.leading, 26)
                 Text("公開する前に、書き出した動画を最後まで見て確かめてください。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 26)
             }
         }
         .padding(.vertical, 4)
@@ -540,7 +556,7 @@ private struct MosaicSection: View {
                     SliderRow(title: "\(model.coverStyle == .blur ? "ぼかし" : "モザイク")の広さ", value: $model.pad, range: 0.2...1.0, step: 0.05,
                               low: "狭い", high: "広い", text: "\(Int((model.pad * 100).rounded()))%",
                               note: "広げると、髪や耳まで隠れます。")
-                    Text("変えると、表示「モザイクあり」の動画にすぐ反映されます。すべての動画に共通です。")
+                    Text("変えると、「隠した表示」にすぐ反映されます。すべての動画に共通です。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

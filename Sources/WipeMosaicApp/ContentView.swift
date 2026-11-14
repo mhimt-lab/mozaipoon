@@ -111,14 +111,14 @@ struct ContentView: View {
         if model.hasVideo {
             ToolbarItem(placement: .principal) {
                 Picker("表示", selection: $model.viewMode) {
-                    Text("モザイクなし").tag(ViewMode.original)
-                    Text("モザイクあり").tag(ViewMode.mosaic)
+                    Text("元の動画").tag(ViewMode.original)
+                    Text("隠した表示").tag(ViewMode.mosaic)
                     if model.current?.summary != nil {
                         Text("書き出し結果").tag(ViewMode.result)
                     }
                 }
                 .pickerStyle(.segmented)
-                .help("モザイクなし（元の動画）／モザイクあり（いま選んでいるものを、書き出しと同じように隠した表示）／書き出し結果（書き出したファイル）。⌘1〜⌘3")
+                .help("元の動画／隠した表示（いま選んでいるものを、書き出しと同じように隠した表示）／書き出し結果（書き出したファイル）。⌘1〜⌘3")
             }
         }
         ToolbarSpacer(.flexible)
@@ -142,7 +142,7 @@ struct ContentView: View {
             Button {
                 model.showInspector.toggle()
             } label: {
-                Label("隠すもの", systemImage: "eye.slash")
+                Label("隠すもの", systemImage: "sidebar.trailing")
             }
             .accessibilityAddTraits(model.showInspector ? .isSelected : [])
             .help(model.showInspector ? "隠すものを選ぶ欄を閉じます" : "隠すものを選ぶ欄を開きます")
@@ -234,7 +234,7 @@ private struct EmptyStateView: View {
                 Step(number: 2, title: "何を隠すか選ぶ", detail: "画面に映る電話番号・名前などの文字、または人の顔。顔は人ごとに並べて、隠す人を選べます。")
                 Step(number: 3, title: "確かめて書き出す", detail: "選んだものだけをモザイクやぼかしで隠します。画質は元の動画のままです。")
             }
-            .frame(maxWidth: 420, alignment: .leading)
+            .frame(maxWidth: 480, alignment: .leading)
             Button("動画を追加…", systemImage: "plus") { model.importingVideo = true }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)

@@ -65,7 +65,7 @@ struct ExportSheet: View {
                 Button("キャンセル", role: .cancel) { model.showingExportSheet = false }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button(chosen.isEmpty ? "書き出す" : "\(chosen.count)本を書き出す") { model.confirmExport() }
+                Button(candidates.count == 1 || chosen.isEmpty ? "書き出す" : "\(chosen.count)本を書き出す") { model.confirmExport() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(chosen.isEmpty)
@@ -83,7 +83,8 @@ struct ExportSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(candidates.enumerated()), id: \.element.id) { i, v in
                 if i > 0 { Divider().padding(.leading, 104) }
-                ExportRow(model: model, video: v)
+                // One video needs no checkbox: unchecking it would only disable the button.
+                ExportRow(model: model, video: v, checkable: candidates.count > 1)
                     .padding(.horizontal, 12)
             }
         }
@@ -143,14 +144,26 @@ struct ExportSheet: View {
 private struct ExportRow: View {
     @Bindable var model: AppModel
     let video: VideoItem
+    let checkable: Bool
 
     var body: some View {
         let on = Binding(
             get: { model.exportChoice.contains(video.id) && video.canExport },
             set: { if $0 { model.exportChoice.insert(video.id) } else { model.exportChoice.remove(video.id) } })
-        // The whole row is the checkbox's label, so one click toggles exactly once.
-        Toggle(isOn: on) {
-            HStack(spacing: 12) {
+        if checkable {
+            // The whole row is the checkbox's label, so one click toggles exactly once.
+            Toggle(isOn: on) { content }
+                .toggleStyle(.checkbox)
+                .disabled(!video.canExport)
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
+            // Top-aligned: the picture lines up with the name, not with the middle of the
+            // warnings under it.
+            HStack(alignment: .top, spacing: 12) {
                 Group {
                     if let img = video.poster {
                         Image(decorative: img, scale: 1).resizable().aspectRatio(contentMode: .fill)
@@ -214,9 +227,6 @@ private struct ExportRow: View {
             }
             .padding(.vertical, 4)
             .contentShape(Rectangle())
-        }
-        .toggleStyle(.checkbox)
-        .disabled(!video.canExport)
     }
 
     private func warning(_ text: String) -> some View {

@@ -57,19 +57,19 @@ private struct AppCommands: Commands {
             Button("書き出す…") { model.requestExport() }
                 .keyboardShortcut("e")
                 .disabled(!model.canExport)
-            if model.current?.summary != nil {
-                Button("書き出したファイルをFinderで表示") { model.revealOutput() }
-            }
+            // Always listed (disabled without an export), so the menu does not change shape.
+            Button("書き出したファイルをFinderで表示") { model.revealOutput() }
+                .disabled(model.current?.summary == nil)
             Divider()
             Button("一覧から取り除く") { model.requestRemove(model.currentID) }
                 .keyboardShortcut(.delete, modifiers: [.command])
                 .disabled(model.current == nil || model.current?.job.isActive == true)
         }
         CommandGroup(before: .toolbar) {
-            Button("モザイクなし") { model.viewMode = .original }
+            Button("元の動画") { model.viewMode = .original }
                 .keyboardShortcut("1")
                 .disabled(!model.hasVideo)
-            Button("モザイクあり") { model.viewMode = .mosaic }
+            Button("隠した表示") { model.viewMode = .mosaic }
                 .keyboardShortcut("2")
                 .disabled(!model.hasVideo)
             Button("書き出し結果") { model.viewMode = .result }
@@ -90,8 +90,12 @@ private struct AppCommands: Commands {
                 .keyboardShortcut("0")
                 .disabled(!model.hasVideo || model.zoom <= 1)
             Divider()
+            // Instead of InspectorCommands(): its item read "インスペクタをHide" (the verb not
+            // localized) under a doubled separator.
+            Button(model.showInspector ? "隠すものの欄を閉じる" : "隠すものの欄を開く") { model.showInspector.toggle() }
+                .keyboardShortcut("i", modifiers: [.control, .command])
+                .disabled(model.videos.isEmpty)
         }
-        InspectorCommands()
         // Keys are not listed here: a menu key equivalent without ⌘ would take Space from the
         // text fields (and kana conversion). They are handled in AppModel.handleKey and named
         // in the buttons' help.
@@ -120,10 +124,10 @@ private struct AppCommands: Commands {
             .disabled(model.current?.summary?.dips.isEmpty != false)
         }
         CommandMenu("人物") {
-            Button("全員にモザイクをかける") { model.selectAll() }
+            Button("全員を隠す") { model.selectAll() }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
                 .disabled(model.current?.analysis == nil)
-            Button("全員のモザイクを外す") { model.clearAll() }
+            Button("全員を隠すのをやめる") { model.clearAll() }
                 .disabled(model.current?.selected.isEmpty != false)
             Divider()
             Button("顔を探し直す") { model.reanalyze() }

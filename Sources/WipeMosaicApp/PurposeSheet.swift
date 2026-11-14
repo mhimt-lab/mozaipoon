@@ -18,7 +18,7 @@ extension Purpose {
     var symbol: String {
         switch self {
         case .text: "text.viewfinder"
-        case .faces: "person.2.crop.square.stack"
+        case .faces: "face.dashed"
         case .both: "square.stack.3d.up"
         }
     }
@@ -47,6 +47,7 @@ struct PurposeSheet: View {
             HStack {
                 Button("キャンセル", role: .cancel) { model.cancelPurpose() }
                     .keyboardShortcut(.cancelAction)
+                    .controlSize(.large)
                     .help("動画を追加せずに閉じます（esc）")
                 Spacer()
             }
@@ -73,14 +74,18 @@ struct PurposeSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
+                if isDefault {
+                    // Return repeats the last choice: said, not shown as already chosen (a
+                    // screen recording would otherwise look set to faces).
+                    Text("前回と同じ ⏎")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(isDefault ? 0.9 : 0.4), in: .rect(cornerRadius: 10))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(isDefault ? Color.accentColor : .clear, lineWidth: 2)
-            }
+            .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 10))
             .contentShape(.rect(cornerRadius: 10))
         }
         .buttonStyle(.plain)

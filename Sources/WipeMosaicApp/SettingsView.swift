@@ -7,7 +7,7 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            Tab("検出", systemImage: "faceid") { DetectionSettings(model: model) }
+            Tab("顔を探す", systemImage: "faceid") { DetectionSettings(model: model) }
             Tab("登録した顔", systemImage: "person.crop.square") { RegisteredSettings(model: model) }
             Tab("スタンプ", systemImage: "face.smiling") { StickerSettings(model: model) }
         }
@@ -32,6 +32,10 @@ private struct DetectionSettings: View {
                     }
                 }
                 .pickerStyle(.radioGroup)
+                .labelsHidden()
+            } header: {
+                // A header like the other tabs', not a label inside the box.
+                Text("顔を探す精度")
             } footer: {
                 Text("精度を上げるほど時間がかかります。変更は次に動画を開いたとき、または「探し直す」で反映されます。")
                     .font(.callout)
@@ -39,7 +43,7 @@ private struct DetectionSettings: View {
             }
         }
         .formStyle(.grouped)
-        .frame(height: 260)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -88,7 +92,7 @@ private struct RegisteredSettings: View {
             }
         }
         .formStyle(.grouped)
-        .frame(height: 360)
+        .fixedSize(horizontal: false, vertical: true)
         .fileImporter(isPresented: $model.importingPhotos, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { model.addPhotos(urls) }
         }
@@ -150,16 +154,33 @@ private struct StickerSettings: View {
                 } else {
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                         ForEach(Array(model.stickerLibrary.enumerated()), id: \.element.id) { i, item in
+                            let hovered = model.hoveredSticker == item.id
+                            // Delete on hover, as for the registered faces (not a blue link).
                             VStack(spacing: 6) {
                                 Image(decorative: item.sticker.cgImage, scale: 1)
                                     .resizable()
                                     .aspectRatio(contentMode: .fit)
                                     .frame(width: 64, height: 64)
+                                    .overlay(alignment: .topTrailing) {
+                                        if hovered {
+                                            Button {
+                                                model.stickerToRemove = item
+                                            } label: {
+                                                Image(systemName: "xmark.circle.fill")
+                                                    .symbolRenderingMode(.palette)
+                                                    .foregroundStyle(.white, .secondary)
+                                                    .font(.title3)
+                                            }
+                                            .buttonStyle(.plain)
+                                            .offset(x: 4, y: -4)
+                                            .help("スタンプを削除")
+                                            .transition(.opacity)
+                                        }
+                                    }
                                 Text("スタンプ \(i + 1)").font(.callout)
-                                Button("削除", role: .destructive) { model.stickerToRemove = item }
-                                    .buttonStyle(.link)
-                                    .font(.callout)
                             }
+                            .onHover { model.hoveredSticker = $0 ? item.id : (model.hoveredSticker == item.id ? nil : model.hoveredSticker) }
+                            .animation(.easeOut(duration: 0.12), value: hovered)
                             .contextMenu {
                                 Button("削除", systemImage: "trash", role: .destructive) { model.stickerToRemove = item }
                             }
@@ -181,7 +202,7 @@ private struct StickerSettings: View {
             }
         }
         .formStyle(.grouped)
-        .frame(height: 300)
+        .fixedSize(horizontal: false, vertical: true)
         .stickerRemovalDialog(model: model, item: $model.stickerToRemove)
     }
 }

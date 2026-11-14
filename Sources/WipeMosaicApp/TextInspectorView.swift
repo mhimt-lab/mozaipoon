@@ -193,6 +193,7 @@ struct TextInspectorView: View {
                 Label("言葉を追加", systemImage: "plus")
             }
             .buttonStyle(.borderless)
+            .foregroundStyle(Color.accentColor)  // the title too, not only the ＋ (gray read as disabled)
             .disabled(model.addingTextWord)
             .help("隠す言葉の欄を増やします")
             .listRowSeparator(.hidden)
@@ -348,10 +349,19 @@ private struct TextLineRow: View {
                     Text(entry.text)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(caption(whole: whole, partly: partly))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                    // The state on one line and the time at the end, so no row wraps the time
+                    // alone onto a third line.
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(caption(whole: whole, partly: partly))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 0)
+                        Text("\(formatTime(text.times[entry.firstFrame]))〜")
+                            .monospacedDigit()
+                            .fixedSize()
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -360,25 +370,25 @@ private struct TextLineRow: View {
             .help("押すと、この行が映る場面を表示します")
             .accessibilityHint("この行が映る場面を表示します")
             Spacer(minLength: 0)
-            if whole || partly {
-                Image(systemName: "eye.slash")
-                    .foregroundStyle(Color.accentColor)
-                    .help(whole ? "行全体を隠しています" : "一部を隠しています")
-            }
+            // Room kept when not hidden too, so the times line up in one column.
+            Image(systemName: "eye.slash")
+                .foregroundStyle(Color.accentColor)
+                .opacity(whole || partly ? 1 : 0)
+                .help(whole ? "行全体を隠しています" : partly ? "一部を隠しています" : "")
+                .accessibilityHidden(!(whole || partly))
         }
         .padding(.vertical, 2)
     }
 
     private func caption(whole: Bool, partly: Bool) -> String {
-        let at = formatTime(text.times[entry.firstFrame])
-        if whole { return "行全体を隠しています・\(at)〜" }
+        if whole { return "行全体を隠す" }
         if partly {
             var why = entry.kinds.filter { model.textKinds.contains($0) }.sorted { $0.rawValue < $1.rawValue }.map(\.shortLabel)
             if video.textMask?.wordHits.contains(entry.id) == true { why.append("言葉") }
             if why.isEmpty { why.append("読み違えた行の続き") }
-            return "一部を隠しています（\(why.joined(separator: "・"))）・\(at)〜"
+            return "一部を隠す（\(why.joined(separator: "・"))）"
         }
-        return "隠していません・\(at)〜"
+        return "隠していません"
     }
 }
 

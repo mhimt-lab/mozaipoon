@@ -122,6 +122,8 @@ final class AppModel {
     var registering = false
     var importingPhotos = false
     var hoveredFace: UUID?
+    /// The sticker under the pointer in Settings (its delete button shows on hover).
+    var hoveredSticker: UUID?
 
     // MARK: Videos
     var videos: [VideoItem] = []
@@ -752,12 +754,12 @@ final class AppModel {
 
     func selectAll() {
         guard let v = current else { return }
-        apply(Set(v.analysis?.people.map(\.id) ?? []), to: v, action: "全員にモザイクをかける")
+        apply(Set(v.analysis?.people.map(\.id) ?? []), to: v, action: "全員を隠す")
     }
 
     func clearAll() {
         guard let v = current else { return }
-        apply([], to: v, action: "全員のモザイクを外す")
+        apply([], to: v, action: "全員を隠すのをやめる")
     }
 
     /// Check the people hinted by registered photos or other videos.
