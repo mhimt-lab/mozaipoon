@@ -79,6 +79,17 @@ private struct AppCommands: Commands {
             Button(model.showFaceBoxes ? "枠を隠す" : "枠を表示") { model.showFaceBoxes.toggle() }
                 .keyboardShortcut("b")
             Divider()
+            // Also pinch, double-tap with two fingers and scroll over the video (Zoom.swift).
+            Button("拡大") { model.zoomIn() }
+                .keyboardShortcut("+")
+                .disabled(!model.hasVideo || model.zoom >= ZoomGeometry.maxZoom)
+            Button("縮小") { model.zoomOut() }
+                .keyboardShortcut("-")
+                .disabled(!model.hasVideo || model.zoom <= 1)
+            Button("全体を表示") { model.resetZoom() }
+                .keyboardShortcut("0")
+                .disabled(!model.hasVideo || model.zoom <= 1)
+            Divider()
         }
         InspectorCommands()
         // Keys are not listed here: a menu key equivalent without ⌘ would take Space from the

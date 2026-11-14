@@ -103,6 +103,17 @@ func uprightImage(_ pb: CVPixelBuffer, _ info: VideoInfo) -> CIImage {
     return info.orientation == .up ? raw : raw.oriented(info.orientation)
 }
 
+/// Index of the frame on screen at `time` in `times` (the decoded frames' presentation times, as
+/// `forEachFrame` reads them): the last frame that starts at or before it.
+public func frameIndex(_ times: [Double], at time: Double) -> Int {
+    var lo = 0, hi = times.count
+    while lo < hi {
+        let mid = (lo + hi) / 2
+        if times[mid] <= time + 1e-3 { lo = mid + 1 } else { hi = mid }
+    }
+    return max(0, lo - 1)
+}
+
 /// Decode every video frame once and hand the upright image to `body`.
 /// Throws CancellationError when the surrounding task is cancelled.
 func forEachFrame(

@@ -173,6 +173,18 @@ final class AppModel {
     /// The main window, for the player keys (`handleKey`).
     @ObservationIgnored weak var mainWindow: NSWindow?
     @ObservationIgnored private var keyMonitor: Any?
+    @ObservationIgnored private var zoomMonitor: Any?
+    /// How much the video is enlarged in the viewer (1 = whole video), kept across the three
+    /// views (to compare the same place) and reset for another video. See Zoom.swift.
+    var zoom: CGFloat = 1
+    /// Point of the video at the middle of the viewer, in fractions of the video (`ZoomGeometry`).
+    var zoomCenter = CGPoint(x: 0.5, y: 0.5)
+    /// The viewer (its own coordinates, top-left origin), to place pinches and scrolls.
+    @ObservationIgnored weak var viewerView: NSView?
+    @ObservationIgnored var pinching = false
+    /// A trackpad scroll (and its momentum) that started over the video moves it to the end,
+    /// one that started elsewhere never does.
+    @ObservationIgnored var scrollOverViewer = false
     var viewMode: ViewMode = .mosaic {
         didSet { if oldValue != viewMode { applyViewMode() } }
     }
@@ -221,6 +233,11 @@ final class AppModel {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             nonisolated(unsafe) let event = e
             let handled = MainActor.assumeIsolated { self?.handleKey(event) == true }
+            return handled ? nil : e
+        }
+        zoomMonitor = NSEvent.addLocalMonitorForEvents(matching: [.magnify, .smartMagnify, .scrollWheel]) { [weak self] e in
+            nonisolated(unsafe) let event = e
+            let handled = MainActor.assumeIsolated { self?.handleZoomEvent(event) == true }
             return handled ? nil : e
         }
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -319,6 +336,23 @@ final class AppModel {
         guard let v = current, let text = v.text, let mask = v.textMask, showFaceBoxes, !isPlaying, viewMode != .result
         else { return [] }
         return mask.frames[text.frameIndex(at: currentTime)]
+    }
+
+    /// Presentation times of the current video's frames, as read to find faces or text (the
+    /// boxes on screen are looked up in these). nil before either has been read.
+    var frameTimes: [Double]? {
+        guard let v = current else { return nil }
+        if let t = v.analysis?.times, !t.isEmpty { return t }
+        if let t = v.text?.times, !t.isEmpty { return t }
+        return nil
+    }
+
+    /// Number (from 1) of the frame on screen and the frame count, from the same times as
+    /// the boxes: the number changes exactly when the boxes do. nil before the frames are read
+    /// (a number from the frame rate would be wrong for variable frame rate recordings).
+    var frameNumber: (index: Int, count: Int)? {
+        guard let times = frameTimes else { return nil }
+        return (frameIndex(times, at: currentTime) + 1, times.count)
     }
 
     // MARK: - Registered photos
@@ -1001,6 +1035,7 @@ final class AppModel {
         player.pause()
         playbackRate = 1  // a faster speed is easy to forget; each video starts at normal speed
         timelineHover = nil  // the timeline is rebuilt for the new video without a hover end
+        resetZoom()  // another video starts whole: an enlarged view hides what is outside it
         guard let v = current, v.isReady else {
             player.replaceCurrentItem(with: nil)
             currentTime = 0
@@ -1135,8 +1170,9 @@ final class AppModel {
     /// time, go to the moment they first appear.
     func reveal(_ id: Int) {
         guard let v = current, let analysis = v.analysis, let p = v.person(id) else { return }
-        let onScreen = analysis.faces(atFrame: analysis.frameIndex(at: currentTime)).contains { $0.person == id }
-        if !onScreen || viewMode == .result { jump(to: p) }
+        let frame = analysis.frameIndex(at: currentTime)
+        let onScreen = analysis.faces(atFrame: frame).contains { $0.person == id }
+        if !onScreen || viewMode == .result { jump(to: p) } else { showZoomed(person: id, atFrame: frame) }
     }
 
     /// Go to the start of this person's next scene after the current time; after the last
@@ -1146,6 +1182,7 @@ final class AppModel {
         if viewMode == .result { viewMode = .mosaic }
         let next = v.scenes[id]?.first { $0.lowerBound > currentTime + 0.01 } ?? first
         v.focusedPerson = id
+        if let analysis = v.analysis { showZoomed(person: id, atFrame: analysis.frameIndex(at: next.lowerBound)) }
         seek(to: next.lowerBound)
     }
 
@@ -1153,8 +1190,13 @@ final class AppModel {
     func step(_ frames: Int) {
         player.pause()
         // Still seeking: step from where the playhead is going, not from the frame on screen.
-        if let t = cancelPendingSeek(), let fps = current?.info?.fps, fps > 0 {
-            seek(to: t + Double(frames) / fps)
+        if let t = cancelPendingSeek() {
+            if let times = frameTimes {
+                // The frame times themselves: right also for variable frame rate recordings.
+                seek(to: times[min(max(frameIndex(times, at: t) + frames, 0), times.count - 1)])
+            } else if let fps = current?.info?.fps, fps > 0 {
+                seek(to: t + Double(frames) / fps)
+            }
             return
         }
         player.currentItem?.step(byCount: frames)
@@ -1164,6 +1206,7 @@ final class AppModel {
         guard let v = current, let analysis = v.analysis else { return }
         if viewMode == .result { viewMode = .mosaic }
         v.focusedPerson = person.id
+        showZoomed(person: person.id, atFrame: person.firstFrame)
         seek(to: analysis.times[person.firstFrame])
     }
 
@@ -1335,6 +1378,7 @@ final class AppModel {
     func cancelExports() { exportTask?.cancel() }
 
     func review(_ dip: Dip) {
+        resetZoom()  // checking the exported file: the whole picture, not a part of it
         viewMode = .result
         seek(to: dip.start)
     }

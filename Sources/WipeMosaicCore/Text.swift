@@ -223,14 +223,7 @@ public struct ScreenText: Sendable {
     /// Seconds a line is continued before/after it was recognized.
     let extend: Double
 
-    public func frameIndex(at time: Double) -> Int {
-        var lo = 0, hi = times.count
-        while lo < hi {
-            let mid = (lo + hi) / 2
-            if times[mid] <= time + 1e-3 { lo = mid + 1 } else { hi = mid }
-        }
-        return max(0, lo - 1)
-    }
+    public func frameIndex(at time: Double) -> Int { WipeMosaicCore.frameIndex(times, at: time) }
 
     var entryOfTrack: [Int: Int] {
         var m: [Int: Int] = [:]

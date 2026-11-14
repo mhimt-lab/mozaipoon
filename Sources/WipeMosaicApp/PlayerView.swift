@@ -2,27 +2,131 @@ import AVKit
 import SwiftUI
 import WipeMosaicCore
 
-/// AVKit's player with the system floating (Liquid Glass) controls, frame stepping and scrubbing.
+/// AVKit's player, enlarged and moved inside a viewer that clips it (see `ZoomGeometry`).
 struct PlayerView: NSViewRepresentable {
     let player: AVPlayer
+    let videoSize: CGSize
+    let zoom: CGFloat
+    let center: CGPoint
+    let found: (NSView) -> Void
+    /// Dragging the enlarged video moves it (points; positive = down and right).
+    let drag: (CGVector) -> Void
 
-    func makeNSView(context: Context) -> AVPlayerView {
-        let v = AVPlayerView()
-        v.player = player
+    func makeNSView(context: Context) -> ZoomingPlayerView {
+        let v = ZoomingPlayerView()
+        let pv = v.playerView
+        pv.player = player
         // The app draws its own always-visible bar under the video (TransportBar):
         // AVKit's controls hide unless the pointer is over the video.
-        v.controlsStyle = .none
-        v.videoGravity = .resizeAspect
-        v.showsFrameSteppingButtons = true
-        v.showsFullScreenToggleButton = false  // full screen would hide the face boxes
-        v.allowsPictureInPicturePlayback = false
-        v.allowsVideoFrameAnalysis = false  // no Live Text / subject lifting on private footage
-        v.showsSharingServiceButton = false
+        pv.controlsStyle = .none
+        pv.videoGravity = .resizeAspect
+        pv.showsFrameSteppingButtons = true
+        pv.showsFullScreenToggleButton = false  // full screen would hide the face boxes
+        pv.allowsPictureInPicturePlayback = false
+        pv.allowsVideoFrameAnalysis = false  // no Live Text / subject lifting on private footage
+        pv.showsSharingServiceButton = false
+        v.drag = drag
+        found(v)
         return v
     }
 
-    func updateNSView(_ v: AVPlayerView, context: Context) {
-        if v.player !== player { v.player = player }
+    func updateNSView(_ v: ZoomingPlayerView, context: Context) {
+        if v.playerView.player !== player { v.playerView.player = player }
+        v.place(video: videoSize, zoom: zoom, center: center)
+    }
+}
+
+/// Clips the player view, which is the viewer enlarged `zoom` times: AVPlayerLayer scales the
+/// decoded frame on the GPU, so the picture stays sharp and no large image is made.
+final class ZoomingPlayerView: NSView {
+    let playerView = AVPlayerView()
+    private var video = CGSize(width: 16, height: 9)
+    private var zoom: CGFloat = 1
+    private var center = CGPoint(x: 0.5, y: 0.5)
+    var drag: ((CGVector) -> Void)?
+    private var lastDrag: NSPoint?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        clipsToBounds = true  // not the default since macOS 14
+        playerView.autoresizingMask = []
+        addSubview(playerView)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override var isFlipped: Bool { true }
+
+    func place(video: CGSize, zoom: CGFloat, center: CGPoint) {
+        let wasZoomed = self.zoom > 1
+        self.video = video
+        self.zoom = zoom
+        self.center = center
+        layoutPlayer()
+        if wasZoomed != (zoom > 1) { window?.invalidateCursorRects(for: self) }
+    }
+
+    // While enlarged, the video can be dragged like a photo (the mouse has no horizontal
+    // wheel); the face boxes above still take their own clicks.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard zoom > 1 else { return super.hitTest(point) }
+        return frame.contains(point) ? self : nil
+    }
+
+    override func resetCursorRects() {
+        if zoom > 1 { addCursorRect(bounds, cursor: .openHand) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard zoom > 1 else { return super.mouseDown(with: event) }
+        lastDrag = convert(event.locationInWindow, from: nil)
+        NSCursor.closedHand.push()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard zoom > 1, let last = lastDrag else { return super.mouseDragged(with: event) }
+        // From the positions (this view is flipped: y grows downward, as the delta expects).
+        let p = convert(event.locationInWindow, from: nil)
+        lastDrag = p
+        drag?(CGVector(dx: p.x - last.x, dy: p.y - last.y))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard lastDrag != nil else { return super.mouseUp(with: event) }
+        lastDrag = nil
+        NSCursor.pop()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        layoutPlayer()
+    }
+
+    private func layoutPlayer() {
+        let f = ZoomGeometry.playerFrame(viewer: bounds.size, video: video, zoom: zoom, center: center)
+        if playerView.frame != f { playerView.frame = f }
+    }
+}
+
+/// A second, small picture of the same player (for the zoom navigator). An AVPlayer can show
+/// in several layers; the video composition renders once for all of them.
+private struct MiniPlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        let layer = AVPlayerLayer(player: player)
+        layer.videoGravity = .resizeAspect
+        layer.backgroundColor = NSColor.black.cgColor
+        v.layer = layer
+        v.wantsLayer = true
+        return v
+    }
+
+    func updateNSView(_ v: NSView, context: Context) {
+        if let layer = v.layer as? AVPlayerLayer, layer.player !== player { layer.player = player }
     }
 }
 
@@ -34,10 +138,13 @@ struct ViewerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PlayerView(player: model.player)
+            PlayerView(
+                player: model.player, videoSize: videoSize, zoom: model.zoom, center: model.zoomCenter,
+                found: { model.viewerView = $0 }, drag: { model.panZoom(by: $0) })
                 .background(.black)
                 .overlay { textBoxes }
                 .overlay { faceBoxes }
+                .overlay { zoomNavigator }
                 .overlay { analysisCard }
                 .overlay(alignment: .top) { hint }
                 .overlay(alignment: .topTrailing) { boxToggle }
@@ -49,29 +156,101 @@ struct ViewerView: View {
 
     private var faceBoxes: some View {
         GeometryReader { geo in
-            let s = min(geo.size.width / videoSize.width, geo.size.height / videoSize.height)
-            let ox = (geo.size.width - videoSize.width * s) / 2
-            let oy = (geo.size.height - videoSize.height * s) / 2
+            let shown = shownVideo(geo.size)
+            let s = shown.width / videoSize.width
+            let viewer = CGRect(origin: .zero, size: geo.size)
             GlassEffectContainer {
                 ForEach(Array(model.visibleFaces.enumerated()), id: \.offset) { _, face in
                     let r = face.rect  // Core Image coordinates (bottom-left origin)
                     let box = CGRect(
-                        x: ox + r.minX * s, y: oy + (videoSize.height - r.maxY) * s,
+                        x: shown.minX + r.minX * s, y: shown.minY + (videoSize.height - r.maxY) * s,
                         width: r.width * s, height: r.height * s)
-                    FaceBox(
-                        person: face.person,
-                        mosaic: video.selected.contains(face.person),
-                        focused: video.focusedPerson == face.person
-                    ) {
-                        video.focusedPerson = face.person
-                        model.toggle(face.person)
+                    // While enlarged, a box partly outside the viewer is drawn whole (and clipped)
+                    // but takes clicks only inside it: clipping hides the rest, yet still lets it
+                    // be hit over the bar below.
+                    let visible = box.intersection(viewer)
+                    if visible.width >= 4, visible.height >= 4 {
+                        FaceBox(
+                            person: face.person,
+                            mosaic: video.selected.contains(face.person),
+                            focused: video.focusedPerson == face.person,
+                            hit: visible.offsetBy(dx: -box.minX, dy: -box.minY),
+                            // The name goes above the box, or inside its visible top when there
+                            // is no room above.
+                            labelInside: box.minY < 30
+                        ) {
+                            video.focusedPerson = face.person
+                            model.toggle(face.person)
+                        }
+                        .frame(width: box.width, height: box.height)
+                        .position(x: box.midX, y: box.midY)
                     }
-                    .frame(width: box.width, height: box.height)
-                    .position(x: box.midX, y: box.midY)
                 }
             }
         }
+        .clipped()
         .animation(.snappy(duration: 0.2), value: video.selected)
+    }
+
+    // MARK: Zoom navigator
+
+    /// While enlarged: the whole video in small with the part in view outlined, and the zoom.
+    /// Over the video, where the eyes are, so it is not forgotten that the rest is not in view.
+    @ViewBuilder
+    private var zoomNavigator: some View {
+        if model.zoom > 1 {
+            GeometryReader { geo in
+                let part = model.visiblePart(viewer: geo.size, video: videoSize)
+                let landscape = videoSize.width >= videoSize.height
+                let w = landscape ? 88 : 64 * videoSize.width / max(videoSize.height, 1)
+                let h = landscape ? 88 * videoSize.height / max(videoSize.width, 1) : 64
+                Button {
+                    model.resetZoom()
+                } label: {
+                    HStack(spacing: 8) {
+                        ZStack(alignment: .topLeading) {
+                            // The same player drawn small: the same picture as the viewer (with
+                            // the mosaic in "モザイクあり"), nothing more.
+                            MiniPlayerView(player: model.player)
+                                .clipShape(.rect(cornerRadius: 3))
+                            // Outside the part in view darkened, the part itself outlined.
+                            let inView = CGRect(
+                                x: part.minX * w, y: part.minY * h,
+                                width: max(part.width * w, 4), height: max(part.height * h, 4))
+                            Path { p in
+                                p.addRect(CGRect(x: 0, y: 0, width: w, height: h))
+                                p.addRect(inView)
+                            }
+                            .fill(.black.opacity(0.5), style: FillStyle(eoFill: true))
+                            Path(inView)
+                                .stroke(.white, lineWidth: 1.5)
+                                .shadow(color: .black.opacity(0.6), radius: 1)
+                        }
+                        .frame(width: w, height: h)
+                        Text(model.zoomLabel)
+                            .font(.callout.weight(.semibold))
+                            .monospacedDigit()
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(8)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                .help("拡大して表示しています。白い枠の中だけが見えています。押すと全体を表示します（⌘0）。拡大中は動画をドラッグかスクロールで動かせます")
+                .accessibilityLabel("拡大 \(model.zoomLabel)")
+                .accessibilityHint("全体を表示します")
+                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            }
+            .transition(.opacity)
+        }
+    }
+
+    /// Where the video is drawn in a viewer of this size (enlarged and moved by the zoom).
+    private func shownVideo(_ viewer: CGSize) -> CGRect {
+        ZoomGeometry.videoRect(viewer: viewer, video: videoSize, zoom: model.zoom, center: model.zoomCenter)
     }
 
     // MARK: Text boxes
@@ -79,16 +258,16 @@ struct ViewerView: View {
     /// Dashed outlines where text is hidden (not written to the file).
     private var textBoxes: some View {
         GeometryReader { geo in
-            let s = min(geo.size.width / videoSize.width, geo.size.height / videoSize.height)
-            let ox = (geo.size.width - videoSize.width * s) / 2
-            let oy = (geo.size.height - videoSize.height * s) / 2
+            let shown = shownVideo(geo.size)
+            let s = shown.width / videoSize.width
             ForEach(Array(model.visibleTextBoxes.enumerated()), id: \.offset) { _, r in
                 RoundedRectangle(cornerRadius: 3)
                     .strokeBorder(Color.orange, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
                     .frame(width: r.width * s, height: r.height * s)
-                    .position(x: ox + r.midX * s, y: oy + (videoSize.height - r.midY) * s)
+                    .position(x: shown.minX + r.midX * s, y: shown.minY + (videoSize.height - r.midY) * s)
             }
         }
+        .clipped()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -177,6 +356,9 @@ private struct FaceBox: View {
     let person: Int
     let mosaic: Bool
     let focused: Bool
+    /// The clickable part, in the box's own coordinates.
+    let hit: CGRect
+    let labelInside: Bool
     let action: () -> Void
 
     var body: some View {
@@ -186,7 +368,7 @@ private struct FaceBox: View {
                     mosaic ? Color.accentColor : Color.white.opacity(0.85),
                     style: StrokeStyle(lineWidth: focused ? 3.5 : 2, dash: mosaic ? [] : [6, 4]))
                 .shadow(color: .black.opacity(0.5), radius: 2)
-                .contentShape(Rectangle())
+                .contentShape(Path(hit))
         }
         .buttonStyle(.plain)
         .overlay(alignment: .topLeading) {
@@ -202,7 +384,8 @@ private struct FaceBox: View {
                 .padding(.vertical, 3)
                 .glassEffect(.regular, in: .capsule)
                 .fixedSize()
-                .alignmentGuide(.top) { $0[.bottom] + 4 }
+                .alignmentGuide(.top) { d in labelInside ? -(hit.minY + 4) : d[.bottom] + 4 }
+                .alignmentGuide(.leading) { _ in -hit.minX }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)  // the box itself carries the label
         }
@@ -224,47 +407,21 @@ private struct TransportBar: View {
         return d.isFinite && d > 0 ? d : max(video.info?.duration ?? 1, 0.01)
     }
 
+    private var hasDips: Bool { video.summary?.dips.isEmpty == false }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                Button {
-                    model.step(-1)
-                } label: {
-                    Label("1コマ戻る", systemImage: "backward.frame.fill").labelStyle(.iconOnly)
-                }
-                .help("1コマ戻る（←。⇧← で 1 秒戻る）")
-                Button {
-                    model.togglePlay()
-                } label: {
-                    Label(model.isPlaying ? "一時停止" : "再生", systemImage: model.isPlaying ? "pause.fill" : "play.fill")
-                        .labelStyle(.iconOnly)
-                        .frame(width: 18)
-                }
-                .help(model.isPlaying ? "一時停止（スペース）" : "再生（スペース。L でもう一度押すと速くなる）")
-                Button {
-                    model.step(1)
-                } label: {
-                    Label("1コマ進む", systemImage: "forward.frame.fill").labelStyle(.iconOnly)
-                }
-                .help("1コマ進む（→。⇧→ で 1 秒進む）")
-                Timeline(model: model, video: video, duration: duration)
-                Text("\(formatTime(model.playheadTime)) / \(formatDuration(duration))")
-                    .font(.callout)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                if model.playbackRate != 1 {
-                    // Always in sight: at a faster speed, a few frames left unhidden are easy to miss.
-                    Text(rateLabel(model.playbackRate))
-                        .font(.callout.weight(.semibold))
-                        .monospacedDigit()
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(.quaternary, in: .capsule)
-                        .help("再生の速さ（再生 ▸ 速さ で変えられます）")
-                }
+            // At the narrowest window the timeline keeps room to drag: the frame number goes
+            // first, then the time.
+            ViewThatFits(in: .horizontal) {
+                controls(time: true, frame: true)
+                controls(time: true, frame: false)
+                controls(time: false, frame: false)
             }
             .buttonStyle(.borderless)
             .font(.title3)
+            // Room for the dip markers above the track (they sit over the bar's top padding).
+            .padding(.top, hasDips ? Timeline.dipRow - 10 : 0)
             if let id = video.focusedPerson, video.scenes[id] != nil {
                 Text(video.selected.contains(id)
                      ? "青い太線は「人物 \(id)」が映っている場面です（隠す人）。"
@@ -272,8 +429,8 @@ private struct TransportBar: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            if let dips = video.summary?.dips, !dips.isEmpty {
-                Text("▼は書き出した動画で確かめてほしい場面です（押すとその場面へ）。")
+            if hasDips {
+                Text("\(Text(Image(systemName: "arrowtriangle.down.fill")).foregroundStyle(.orange))は書き出した動画で確かめてほしい場面です（押すとその場面へ）。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -281,6 +438,70 @@ private struct TransportBar: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar)
+    }
+
+    private func controls(time: Bool, frame: Bool) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                model.step(-1)
+            } label: {
+                Label("1コマ戻る", systemImage: "backward.frame.fill").labelStyle(.iconOnly)
+            }
+            .help("1コマ戻る（←。⇧← で 1 秒戻る）")
+            Button {
+                model.togglePlay()
+            } label: {
+                Label(model.isPlaying ? "一時停止" : "再生", systemImage: model.isPlaying ? "pause.fill" : "play.fill")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 18)
+            }
+            .help(model.isPlaying ? "一時停止（スペース）" : "再生（スペース。L でもう一度押すと速くなる）")
+            Button {
+                model.step(1)
+            } label: {
+                Label("1コマ進む", systemImage: "forward.frame.fill").labelStyle(.iconOnly)
+            }
+            .help("1コマ進む（→。⇧→ で 1 秒進む）")
+            Timeline(model: model, video: video, duration: duration)
+                .frame(minWidth: 140)
+            if time {
+                Text("\(formatTime(model.playheadTime)) / \(formatDuration(duration))")
+                    .font(.callout)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+            if frame, let n = model.frameNumber {
+                // The frame on screen (its boxes), to tell one frame from the next; the count
+                // is in the help. As wide as the largest number from the start, so the timeline
+                // does not shift while the number grows. Dimmed while the picture is still
+                // catching up with the playhead (the number is that of the frame shown).
+                Text("コマ \(n.count)")
+                    .hidden()
+                    .overlay(alignment: .trailing) {
+                        Text("コマ \(n.index)")
+                    }
+                    .font(.callout)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .opacity(model.pendingSeek == nil ? 1 : 0.5)
+                    .fixedSize()
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("コマ \(n.index)、全 \(n.count) コマ")
+                    .help("いま表示しているコマの番号（全 \(n.count) コマ）")
+            }
+            if model.playbackRate != 1 {
+                // Always in sight: at a faster speed, a few frames left unhidden are easy to miss.
+                Text(rateLabel(model.playbackRate))
+                    .font(.callout.weight(.semibold))
+                    .monospacedDigit()
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: .capsule)
+                    .fixedSize()
+                    .help("再生の速さ（再生 ▸ 速さ で変えられます）")
+            }
+        }
     }
 }
 
@@ -296,21 +517,21 @@ private struct Timeline: View {
             ZStack(alignment: .leading) {
                 // Thin track, thick scene lines: in the same width and a near gray, the lines of a
                 // person not hidden read as part of the track.
-                Capsule().fill(.quaternary).frame(height: 4).offset(y: trackY)
+                Capsule().fill(.quaternary).frame(height: 4)
                 if let id = video.focusedPerson, let scenes = video.scenes[id] {
                     let on = video.selected.contains(id)
                     ForEach(Array(scenes.enumerated()), id: \.offset) { _, r in
                         Capsule()
                             .fill(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.primary.opacity(0.7)))
                             .frame(width: max(4, x(r.upperBound) - x(r.lowerBound)), height: 8)
-                            .offset(x: x(r.lowerBound), y: trackY)
+                            .offset(x: x(r.lowerBound))
                     }
                 }
                 Circle()
                     .fill(.white)
                     .shadow(color: .black.opacity(0.35), radius: 1.5)
                     .frame(width: 14, height: 14)
-                    .offset(x: x(model.playheadTime) - 7, y: trackY)
+                    .offset(x: x(model.playheadTime) - 7)
             }
             .frame(height: geo.size.height)
             .contentShape(Rectangle())
@@ -332,16 +553,19 @@ private struct Timeline: View {
                         Button {
                             model.review(d)
                         } label: {
+                            // A glyph big enough to see and a target big enough to hit
+                            // (24×24 pt), above the track so it does not take the knob's drags.
                             Image(systemName: "arrowtriangle.down.fill")
-                                .font(.system(size: 9))
+                                .font(.system(size: 13))
                                 .foregroundStyle(.orange)
-                                .frame(width: 16, height: 12)
+                                .padding(.bottom, 1)
+                                .frame(width: 24, height: Self.dipRow, alignment: .bottom)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .help("確かめてほしい場面（\(formatTime(d.start))）：前後より隠す顔が減っています。押すと書き出した動画のこの場面へ移動します")
                         .accessibilityLabel("確かめてほしい場面 \(formatTime(d.start))")
-                        .position(x: x(d.start), y: 5)
+                        .position(x: x(d.start), y: -Self.dipRow / 2)
                     }
                 }
             }
@@ -354,12 +578,15 @@ private struct Timeline: View {
                         .padding(.vertical, 2)
                         .background(.regularMaterial, in: .capsule)
                         .fixedSize()
-                        .position(x: min(max(x(h), 28), max(w - 28, 28)), y: -10)
+                        // Below the track when the dip markers are above it, not over them.
+                        .position(x: min(max(x(h), 28), max(w - 28, 28)), y: hasDips ? geo.size.height + 10 : -10)
                         .allowsHitTesting(false)
                 }
             }
         }
-        .frame(height: 26)
+        // The track in the middle, in line with the buttons and the time; the dip markers are
+        // drawn above this frame (over the bar's top padding).
+        .frame(height: 20)
         .accessibilityRepresentation {
             Slider(value: Binding(get: { model.playheadTime }, set: { model.seek(to: $0) }), in: 0...duration) {
                 Text("再生位置")
@@ -367,8 +594,9 @@ private struct Timeline: View {
         }
     }
 
-    /// The track sits below the row of dip markers.
-    private var trackY: CGFloat { 4 }
+    private var hasDips: Bool { video.summary?.dips.isEmpty == false }
+    /// Height of the row of dip markers above the track (and of their click targets).
+    static let dipRow: CGFloat = 24
 }
 
 /// "0.5倍", "2倍".

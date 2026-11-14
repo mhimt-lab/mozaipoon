@@ -464,6 +464,7 @@ struct ExportSection: View {
             }
             HStack {
                 Button("再生して確かめる", systemImage: "play.fill") {
+                    model.resetZoom()  // the whole picture, so nothing outside the view is missed
                     model.viewMode = .result
                     model.seek(to: 0)
                     model.togglePlay()
@@ -471,51 +472,50 @@ struct ExportSection: View {
                 Button("Finderで表示", systemImage: "folder") { model.revealOutput() }
             }
             .buttonStyle(.bordered)
+            // One row with what to check next: separate rows drew a separator under each,
+            // at different insets.
+            if s.dips.isEmpty {
+                Text("途中で隠す顔の数が減る場面は見つかりませんでした。公開する前に、書き出した動画を最後まで見て確かめてください。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                DisclosureGroup {
+                    ForEach(s.dips) { d in
+                        Button {
+                            model.review(d)
+                        } label: {
+                            HStack {
+                                Text("\(formatTime(d.start)) – \(formatTime(d.end))").monospacedDigit()
+                                Spacer()
+                                Text("隠す顔 \(d.around) → \(d.count)").foregroundStyle(.secondary).monospacedDigit()
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("書き出した動画のこの場面を表示")
+                    }
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("確かめてほしい場面（\(s.dips.count)か所）")
+                            Text("前後より、隠している顔の数が減っています。顔が見えていないか確かめてください。")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                }
+                Text("公開する前に、書き出した動画を最後まで見て確かめてください。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.vertical, 4)
         .selectionDisabled()
-
-        if s.dips.isEmpty {
-            Label("途中で隠す顔の数が減る場面は見つかりませんでした", systemImage: "checkmark.seal")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .selectionDisabled()
-        } else {
-            DisclosureGroup {
-                ForEach(s.dips) { d in
-                    Button {
-                        model.review(d)
-                    } label: {
-                        HStack {
-                            Text("\(formatTime(d.start)) – \(formatTime(d.end))").monospacedDigit()
-                            Spacer()
-                            Text("隠す顔 \(d.around) → \(d.count)").foregroundStyle(.secondary).monospacedDigit()
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("書き出した動画のこの場面を表示")
-                }
-            } label: {
-                Label {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("確かめてほしい場面（\(s.dips.count)か所）")
-                        Text("前後より、隠している顔の数が減っています。顔が見えていないか確かめてください。")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                }
-            }
-            .selectionDisabled()
-        }
-        Text("公開する前に、書き出した動画を最後まで見て確かめてください。")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .selectionDisabled()
     }
 }
 

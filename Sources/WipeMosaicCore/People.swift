@@ -92,14 +92,7 @@ public struct VideoFaces: Sendable {
         return m
     }
 
-    public func frameIndex(at time: Double) -> Int {
-        var lo = 0, hi = times.count
-        while lo < hi {
-            let mid = (lo + hi) / 2
-            if times[mid] <= time + 1e-3 { lo = mid + 1 } else { hi = mid }
-        }
-        return max(0, lo - 1)
-    }
+    public func frameIndex(at time: Double) -> Int { WipeMosaicCore.frameIndex(times, at: time) }
 
     /// Faces present in one frame with their person id.
     public func faces(atFrame f: Int) -> [(rect: CGRect, person: Int)] {
