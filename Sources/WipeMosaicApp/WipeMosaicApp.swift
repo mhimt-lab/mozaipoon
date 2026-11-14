@@ -39,6 +39,11 @@ struct WipeMosaicApp: App {
 private struct AppCommands: Commands {
     let model: AppModel
 
+    /// On when `mode` is shown; choosing it shows it (turning it off does nothing: one is always on).
+    private func viewModeBinding(_ mode: ViewMode) -> Binding<Bool> {
+        Binding(get: { model.viewMode == mode }, set: { if $0 { model.viewMode = mode } })
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("動画を追加…") { model.importingVideo = true }
@@ -66,18 +71,20 @@ private struct AppCommands: Commands {
                 .disabled(model.current == nil || model.current?.job.isActive == true)
         }
         CommandGroup(before: .toolbar) {
-            Button("元の動画") { model.viewMode = .original }
+            // Toggles, so the menu shows which of the three is on (like the picker in the toolbar).
+            Toggle("元の動画", isOn: viewModeBinding(.original))
                 .keyboardShortcut("1")
                 .disabled(!model.hasVideo)
-            Button("隠した表示") { model.viewMode = .mosaic }
+            Toggle("隠した表示", isOn: viewModeBinding(.mosaic))
                 .keyboardShortcut("2")
                 .disabled(!model.hasVideo)
-            Button("書き出し結果") { model.viewMode = .result }
+            Toggle("書き出し結果", isOn: viewModeBinding(.result))
                 .keyboardShortcut("3")
                 .disabled(model.current?.summary == nil)
             Divider()
             Button(model.showFaceBoxes ? "枠を隠す" : "枠を表示") { model.showFaceBoxes.toggle() }
                 .keyboardShortcut("b")
+                .disabled(!model.canToggleBoxes)
             Divider()
             // Also pinch, double-tap with two fingers and scroll over the video (Zoom.swift).
             Button("拡大") { model.zoomIn() }
@@ -90,21 +97,25 @@ private struct AppCommands: Commands {
                 .keyboardShortcut("0")
                 .disabled(!model.hasVideo || model.zoom <= 1)
             Divider()
-            // Instead of InspectorCommands(): its item read "インスペクタをHide" (the verb not
-            // localized) under a doubled separator.
+            // Instead of SidebarCommands() / InspectorCommands(): their items read "インスペクタを
+            // Hide" (the verb not localized) under a doubled separator.
+            Button(model.showSidebar ? "動画の一覧を隠す" : "動画の一覧を表示") { model.showSidebar.toggle() }
+                .keyboardShortcut("s", modifiers: [.control, .command])
+                .disabled(model.videos.isEmpty)
             Button(model.showInspector ? "隠すものの欄を閉じる" : "隠すものの欄を開く") { model.showInspector.toggle() }
                 .keyboardShortcut("i", modifiers: [.control, .command])
                 .disabled(model.videos.isEmpty)
+            Divider()  // from フルスクリーンにする, which the system adds below
         }
         // Keys are not listed here: a menu key equivalent without ⌘ would take Space from the
         // text fields (and kana conversion). They are handled in AppModel.handleKey and named
         // in the buttons' help.
         CommandMenu("再生") {
-            Button(model.isPlaying ? "一時停止" : "再生") { model.togglePlay() }
+            Button(model.isPlaying ? "一時停止（スペース）" : "再生（スペース）") { model.togglePlay() }
                 .disabled(!model.hasVideo)
-            Button("1コマ戻る") { model.step(-1) }
+            Button("1コマ戻る（←）") { model.step(-1) }
                 .disabled(!model.hasVideo)
-            Button("1コマ進む") { model.step(1) }
+            Button("1コマ進む（→）") { model.step(1) }
                 .disabled(!model.hasVideo)
             Divider()
             Picker("速さ", selection: Binding(get: { model.playbackRate }, set: { model.playbackRate = $0 })) {

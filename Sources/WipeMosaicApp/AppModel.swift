@@ -195,6 +195,10 @@ final class AppModel {
         didSet { UserDefaults.standard.set(mosaicExpanded, forKey: "mosaicExpanded") }
     }
     var showInspector = true
+    /// The list of videos (the split view's sidebar), also opened and closed from the 表示 menu.
+    var showSidebar = true
+    /// The choice under the pointer in the "what to hide" sheet.
+    var hoveredPurpose: Purpose?
     var inspectorTab: InspectorTab = .text
     /// A new empty word field is shown in the text tab ("＋"), and whether its rarely seen
     /// lines are shown.
@@ -310,6 +314,12 @@ final class AppModel {
         MosaicParams(hold: hold, pad: pad, block: autoBlock ? nil : block, style: coverStyle, stickerScale: stickerScale)
     }
     var hasVideo: Bool { current?.isReady == true }
+    /// The face boxes and text outlines can be shown (something was searched, and not in the
+    /// written file, which is checked as it is).
+    var canToggleBoxes: Bool {
+        guard let v = current, viewMode != .result else { return false }
+        return v.analysis != nil || v.textMask != nil
+    }
     var autoBlockSize: Int { Int(current?.info.map { WipeMosaicCore.autoBlock($0.size) } ?? 32) }
     func needsReanalysis(_ v: VideoItem) -> Bool { v.analysis != nil && v.analyzedTiles != accuracy.rawValue }
     /// Videos with people chosen that are not being written.

@@ -35,18 +35,23 @@ struct SidebarView: View {
         .navigationSplitViewColumnWidth(min: 230, ideal: 270, max: 380)
     }
 
-    /// Progress of a multi-video export (one video's progress is shown in its row and the inspector).
+    /// Progress of an export with its Cancel, always in sight (the inspector's Cancel may be
+    /// scrolled away or the inspector closed).
     @ViewBuilder
     private var footer: some View {
-        if let p = model.exportProgress, p.total > 1 {
+        if let p = model.exportProgress, p.total >= 1 {
             HStack(spacing: 10) {
-                ProgressView(value: Double(p.done), total: Double(max(p.total, 1))) {
-                    Text("書き出しています（\(min(p.done + 1, p.total))／\(p.total)本）")
+                // The video being written counts by its own progress, so one video's bar moves.
+                let current = model.videos.lazy.compactMap { v -> Double? in
+                    if case .writing(let f) = v.job { return f } else { return nil }
+                }.first ?? 0
+                ProgressView(value: min(Double(p.done) + current, Double(p.total)), total: Double(max(p.total, 1))) {
+                    Text(p.total > 1 ? "書き出しています（\(min(p.done + 1, p.total))／\(p.total)本）" : "書き出しています")
                         .font(.callout)
                 }
                 Button("中止", role: .cancel) { model.cancelExports() }
                     .controlSize(.small)
-                    .help("書き出しをすべて中止します")
+                    .help(p.total > 1 ? "書き出しをすべて中止します" : "書き出しを中止します。途中までのファイルは削除します")
             }
             .padding(12)
         }
@@ -94,7 +99,8 @@ private struct VideoRow: View {
     private var status: some View {
         switch video.job {
         case .writing(let p):
-            progress("書き出し中", p)
+            // Text only: the one export bar is at the sidebar's foot, with Cancel.
+            StatusLabel("書き出し中 \(Int(p * 100))%", systemImage: "square.and.arrow.up")
         case .queued:
             StatusLabel("書き出し待ち", systemImage: "clock")
         case .failed:

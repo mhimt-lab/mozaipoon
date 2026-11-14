@@ -141,7 +141,9 @@ struct ViewerView: View {
             PlayerView(
                 player: model.player, videoSize: videoSize, zoom: model.zoom, center: model.zoomCenter,
                 found: { model.viewerView = $0 }, drag: { model.panZoom(by: $0) })
-                .background(.black)
+                // Only behind the video: by default a background also fills the safe area, so the
+                // black ran under the sidebar's glass and turned the whole sidebar dark gray.
+                .background(.black, ignoresSafeAreaEdges: [])
                 .overlay { textBoxes }
                 .overlay { faceBoxes }
                 .overlay { zoomNavigator }
@@ -394,7 +396,7 @@ private struct TransportBar: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(.bar)
+        .background(.bar, ignoresSafeAreaEdges: [])  // not under the sidebar either (a white band at its foot)
     }
 
     @ViewBuilder
@@ -413,23 +415,20 @@ private struct TransportBar: View {
     /// One switch for the face boxes and the text outlines (both when both are found). In the
     /// bar rather than over the video, where it would cover what is being checked.
     private var boxToggle: some View {
-        let textOnly = video.analysis == nil
-        let enabled = (video.analysis != nil || video.textMask != nil) && model.viewMode != .result
-        return Button {
-            model.showFaceBoxes.toggle()
-        } label: {
-            Label(model.showFaceBoxes ? "枠を隠す" : "枠を表示",
-                  systemImage: textOnly ? "rectangle.dashed" : "person.crop.square")
+        // A toggle button: on is shown by its background, not only by colour. One symbol for
+        // the face boxes and the text outlines (a person symbol read as a contact).
+        Toggle(isOn: $model.showFaceBoxes) {
+            Label("枠を表示", systemImage: "rectangle.dashed")
                 .labelStyle(.iconOnly)
-                // Accent while the boxes show; an explicit style would hide the disabled look.
-                .foregroundStyle(!enabled ? AnyShapeStyle(.tertiary)
-                                 : model.showFaceBoxes ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
         }
-        .disabled(!enabled)
+        .toggleStyle(.button)
+        // The bar's borderless style would hide the "on" background.
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(!model.canToggleBoxes)
         .help(model.showFaceBoxes
               ? "一時停止中に出る顔の枠と、文字を隠す範囲の枠（橙の点線）を隠す（⌘B）。書き出す動画には入りません"
               : "一時停止中に顔の枠と、文字を隠す範囲の枠（橙の点線）を表示する（⌘B）")
-        .accessibilityValue(model.showFaceBoxes ? "表示中" : "非表示")
     }
 
     private func controls(time: Bool, frame: Bool) -> some View {

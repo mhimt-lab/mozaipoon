@@ -43,13 +43,14 @@ struct PurposeSheet: View {
             ForEach(Purpose.allCases, id: \.self) { p in
                 option(p)
             }
-            // Cancel steps back, so it sits on the leading side (HIG); the choices above go forward.
+            // The only button: at the trailing edge, where a sheet's buttons are (the choices
+            // above are the way forward).
             HStack {
+                Spacer()
                 Button("キャンセル", role: .cancel) { model.cancelPurpose() }
                     .keyboardShortcut(.cancelAction)
                     .controlSize(.large)
                     .help("動画を追加せずに閉じます（esc）")
-                Spacer()
             }
         }
         .padding(24)
@@ -85,11 +86,23 @@ struct PurposeSheet: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 10))
             .contentShape(.rect(cornerRadius: 10))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OptionButtonStyle(hovered: model.hoveredPurpose == p))
+        .onHover { model.hoveredPurpose = $0 ? p : (model.hoveredPurpose == p ? nil : model.hoveredPurpose) }
         .modifier(DefaultKey(isOn: isDefault))
+    }
+}
+
+/// A choice that answers the pointer: a little darker under it, darker still while pressed.
+private struct OptionButtonStyle: ButtonStyle {
+    let hovered: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                .quaternary.opacity(configuration.isPressed ? 1 : hovered ? 0.7 : 0.4),
+                in: .rect(cornerRadius: 10))
+            .animation(.easeOut(duration: 0.1), value: hovered)
     }
 }
 

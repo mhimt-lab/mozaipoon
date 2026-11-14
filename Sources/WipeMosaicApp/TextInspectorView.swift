@@ -232,8 +232,7 @@ struct TextInspectorView: View {
                 .listRowSeparator(.hidden)
             if !text.entries.isEmpty {
                 Toggle("行全体は隠していない行だけを表示（\(text.entries.filter { !isWhole($0) }.count)行）", isOn: $model.textUnhiddenOnly)
-                .toggleStyle(.switch)
-                .controlSize(.small)
+                .toggleStyle(.checkbox)  // like every other choice in this list
                 .help("何も隠していない行と、一部だけ隠した行を並べます。一部だけの行は、残った文字に名前などがないか確かめてください")
                 .listRowSeparator(.hidden)
             }

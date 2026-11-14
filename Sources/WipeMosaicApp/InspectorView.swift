@@ -405,12 +405,12 @@ struct ExportSection: View {
         Section {
             switch video.job {
             case .writing(let p):
-                VStack(alignment: .leading, spacing: 8) {
-                    ProgressView(value: p) {
-                        Text("書き出しています")
-                    } currentValueLabel: {
-                        Text("\(Int(p * 100))%").monospacedDigit()
-                    }
+                // No second bar here: the export's bar and Cancel are at the foot of the
+                // sidebar, always in sight. Cancel is kept here too, where the eyes are.
+                HStack {
+                    Label("書き出しています \(Int(p * 100))%", systemImage: "square.and.arrow.up")
+                        .monospacedDigit()
+                    Spacer()
                     Button((model.exportProgress?.total ?? 1) > 1 ? "すべて中止" : "中止", role: .cancel) { model.cancelExports() }
                         .buttonStyle(.bordered)
                 }
@@ -505,11 +505,16 @@ struct ExportSection: View {
                         Button {
                             model.review(d)
                         } label: {
-                            HStack {
+                            // Shown as something to press (a play mark and the accent), not as
+                            // plain text that only reveals itself on hover.
+                            HStack(spacing: 6) {
+                                Image(systemName: "play.circle")
                                 Text("\(formatTime(d.start)) – \(formatTime(d.end))").monospacedDigit()
                                 Spacer()
                                 Text("隠す顔 \(d.around) → \(d.count)").foregroundStyle(.secondary).monospacedDigit()
                             }
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.vertical, 3)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)

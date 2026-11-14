@@ -60,11 +60,12 @@ struct ExportSheet: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
 
-            // Same as the purpose sheet: Cancel steps back on the leading side, export goes forward on the trailing side.
-            HStack {
+            // As in the save and print sheets: Cancel just left of the default button, both at
+            // the trailing edge.
+            HStack(spacing: 12) {
+                Spacer()
                 Button("キャンセル", role: .cancel) { model.showingExportSheet = false }
                     .keyboardShortcut(.cancelAction)
-                Spacer()
                 Button(candidates.count == 1 || chosen.isEmpty ? "書き出す" : "\(chosen.count)本を書き出す") { model.confirmExport() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)

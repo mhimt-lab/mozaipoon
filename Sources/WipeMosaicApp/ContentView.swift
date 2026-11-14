@@ -62,7 +62,9 @@ struct ContentView: View {
             EmptyStateView(model: model)
                 .navigationTitle("モザイぷーん")
         } else {
-            NavigationSplitView {
+            NavigationSplitView(columnVisibility: Binding(
+                get: { model.showSidebar ? .all : .detailOnly },
+                set: { model.showSidebar = $0 != .detailOnly })) {
                 SidebarView(model: model)
             } detail: {
                 detail

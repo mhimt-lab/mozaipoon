@@ -261,10 +261,17 @@ public func applyBlur(
     let blurred = blocks.clampedToExtent()
         .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: block])
         .cropped(to: ext)
-    var hard = CIImage.empty()
-    for b in boxes { hard = CIImage(color: .white).cropped(to: b).composited(over: hard) }
     let fade = max(2, block / 3)
-    let soft = hard.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: fade])
+    var hard = CIImage.empty(), wide = CIImage.empty()
+    for b in boxes {
+        hard = CIImage(color: .white).cropped(to: b).composited(over: hard)
+        wide = CIImage(color: .white).cropped(to: b.insetBy(dx: -2 * fade, dy: -2 * fade)).composited(over: wide)
+    }
+    // The soft mask is blurred from the boxes widened by 2× the fade, so it is still ~0.98 at
+    // a box's edge and falls smoothly from there. Blurred from the boxes themselves it was
+    // 0.5 at the edge: the step from the full blur inside to half outside showed as a
+    // straight-cut rectangle.
+    let soft = wide.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: fade])
     // Fully blurred inside the boxes (max with the hard mask), fading out only outside them.
     let mask = soft.applyingFilter("CIMaximumCompositing", parameters: [kCIInputBackgroundImageKey: hard]).cropped(to: ext)
     return blurred.applyingFilter(
