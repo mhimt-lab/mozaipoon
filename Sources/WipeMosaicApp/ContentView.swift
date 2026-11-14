@@ -133,13 +133,19 @@ struct ContentView: View {
             .help(exportHelp)
         }
         ToolbarSpacer(.fixed)
+        // Named for what the inspector holds, not a generic sidebar icon. Like Numbers' Format
+        // button (macOS 26), a light gray circle behind the dark icon shows that it is open; a
+        // Toggle would fill it with the accent color, a second blue button next to Export.
         ToolbarItem(placement: .primaryAction) {
             Button {
                 model.showInspector.toggle()
             } label: {
-                Label("右の欄", systemImage: "sidebar.trailing")
+                Label("隠すもの", systemImage: "eye.slash")
+                    .padding(6)
+                    .background(model.showInspector ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear), in: Circle())
             }
-            .help(model.showInspector ? "隠すものを選ぶ欄を隠す" : "隠すものを選ぶ欄を表示")
+            .accessibilityAddTraits(model.showInspector ? .isSelected : [])
+            .help(model.showInspector ? "隠すものを選ぶ欄を閉じます" : "隠すものを選ぶ欄を開きます")
         }
     }
 
