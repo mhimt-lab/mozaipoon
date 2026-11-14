@@ -8,7 +8,7 @@ struct ContentView: View {
 
     var body: some View {
         root
-            .frame(minWidth: 900, minHeight: 560)
+            .frame(minWidth: 940, minHeight: 560)
             .fileImporter(
                 isPresented: $model.importingVideo, allowedContentTypes: [.movie, .audiovisualContent],
                 allowsMultipleSelection: true
@@ -68,6 +68,10 @@ struct ContentView: View {
                 SidebarView(model: model)
             } detail: {
                 detail
+                    // The one export bar, with Cancel: above the video, where it stays in sight
+                    // with the list or the inspector closed (not at the sidebar's foot, which HIG
+                    // keeps free of important controls).
+                    .safeAreaInset(edge: .top, spacing: 0) { ExportProgressStrip(model: model) }
                     .navigationTitle(model.current?.name ?? "モザイぷーん")
                     .navigationSubtitle(model.current?.subtitle ?? "")
                     .modifier(DocumentProxy(url: model.current?.url))

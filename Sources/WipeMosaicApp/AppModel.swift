@@ -122,6 +122,8 @@ final class AppModel {
     var registering = false
     var importingPhotos = false
     var hoveredFace: UUID?
+    /// A registered face waiting for the delete confirmation (the photo file is deleted).
+    var faceToRemove: RegisteredFace?
     /// The sticker under the pointer in Settings (its delete button shows on hover).
     var hoveredSticker: UUID?
 

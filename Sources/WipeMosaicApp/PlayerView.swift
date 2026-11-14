@@ -303,7 +303,7 @@ struct ViewerView: View {
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("中止", role: .cancel) { model.cancelAnalysis() }
+                    Button("中止") { model.cancelAnalysis() }
                         .buttonStyle(.glass)
                 }
             }
@@ -376,32 +376,53 @@ private struct TransportBar: View {
     private var hasDips: Bool { video.summary?.dips.isEmpty == false }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // At the narrowest window the timeline keeps room to drag: the frame number goes
-            // first, then the time.
-            ViewThatFits(in: .horizontal) {
-                controls(time: true, frame: true)
-                controls(time: true, frame: false)
-                controls(time: false, frame: false)
-            }
-            .buttonStyle(.borderless)
-            .font(.title3)
-            // Room for the dip markers above the track (they sit over the bar's top padding).
-            .padding(.top, hasDips ? Timeline.dipRow - 10 : 0)
-            // Always one line, so the video does not grow and shrink as a person is chosen.
-            caption
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+        // At the narrowest window the timeline keeps room to drag: the frame number goes
+        // first, then the time moves down to the end of the caption line (the scenes to check
+        // are told by time, so it is never dropped).
+        ViewThatFits(in: .horizontal) {
+            layout(time: true, frame: true)
+            layout(time: true, frame: false)
+            layout(time: false, frame: false)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar, ignoresSafeAreaEdges: [])  // not under the sidebar either (a white band at its foot)
     }
 
+    private func layout(time: Bool, frame: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            controls(time: time, frame: frame)
+                .buttonStyle(.borderless)
+                .font(.title3)
+                // Room for the dip markers above the track (they sit over the bar's top padding).
+                .padding(.top, hasDips ? Timeline.dipRow - 10 : 0)
+            // Always one line, so the video does not grow and shrink as a person is chosen.
+            HStack(spacing: 12) {
+                caption
+                    .lineLimit(1)
+                    // No ideal width: a long caption must not make the wider layouts "not fit".
+                    .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+                if !time { timeLabel }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var timeLabel: some View {
+        Text("\(formatTime(model.playheadTime)) / \(formatDuration(duration))")
+            .font(.callout)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .fixedSize()
+    }
+
     @ViewBuilder
     private var caption: some View {
-        if let id = video.focusedPerson, video.scenes[id] != nil {
+        if model.viewMode == .result, hasDips {
+            // In the written file the markers are what to look at.
+            Text("\(Text(Image(systemName: "arrowtriangle.down.fill")).foregroundStyle(.orange))は書き出した動画で確かめてほしい場面です（押すとその場面へ）。")
+        } else if let id = video.focusedPerson, video.scenes[id] != nil {
             Text(video.selected.contains(id)
                  ? "青い太線は「人物 \(id)」が映っている場面です（隠す人）。"
                  : "太線は「人物 \(id)」が映っている場面です（まだ隠していない人）。")
@@ -417,7 +438,8 @@ private struct TransportBar: View {
     private var boxToggle: some View {
         // A toggle button: on is shown by its background, not only by colour. One symbol for
         // the face boxes and the text outlines (a person symbol read as a contact).
-        Toggle(isOn: $model.showFaceBoxes) {
+        // Shown off while it cannot be used (no boxes are drawn then), not as a dimmed "on".
+        Toggle(isOn: Binding(get: { model.showFaceBoxes && model.canToggleBoxes }, set: { model.showFaceBoxes = $0 })) {
             Label("枠を表示", systemImage: "rectangle.dashed")
                 .labelStyle(.iconOnly)
         }
@@ -455,13 +477,7 @@ private struct TransportBar: View {
             .help("1コマ進む（→。⇧→ で 1 秒進む）")
             Timeline(model: model, video: video, duration: duration)
                 .frame(minWidth: 140)
-            if time {
-                Text("\(formatTime(model.playheadTime)) / \(formatDuration(duration))")
-                    .font(.callout)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
-            }
+            if time { timeLabel }
             if frame, let n = model.frameNumber {
                 // The frame on screen (its boxes), to tell one frame from the next; the count
                 // is in the help. As wide as the largest number from the start, so the timeline

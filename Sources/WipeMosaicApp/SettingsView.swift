@@ -93,6 +93,17 @@ private struct RegisteredSettings: View {
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
+        // Asked first, like deleting a sticker: the photo file is deleted and cannot be restored.
+        .confirmationDialog(
+            "この顔写真の登録を削除しますか？",
+            isPresented: Binding(get: { model.faceToRemove != nil }, set: { if !$0 { model.faceToRemove = nil } }),
+            presenting: model.faceToRemove
+        ) { face in
+            Button("削除", role: .destructive) { model.removeRegistered(face) }
+            Button("キャンセル", role: .cancel) {}
+        } message: { _ in
+            Text("削除は取り消せません。これから追加する動画では、この写真に似ている人に最初からチェックが入らなくなります。")
+        }
         .fileImporter(isPresented: $model.importingPhotos, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { model.addPhotos(urls) }
         }
@@ -114,7 +125,7 @@ private struct RegisteredTile: View {
                 .overlay(alignment: .topTrailing) {
                     if hovered {
                         Button {
-                            model.removeRegistered(face)
+                            model.faceToRemove = face
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .symbolRenderingMode(.palette)
@@ -131,11 +142,11 @@ private struct RegisteredTile: View {
         .onHover { model.hoveredFace = $0 ? face.id : (model.hoveredFace == face.id ? nil : model.hoveredFace) }
         .animation(.easeOut(duration: 0.12), value: hovered)
         .contextMenu {
-            Button("登録を削除", systemImage: "trash", role: .destructive) { model.removeRegistered(face) }
+            Button("登録を削除…", systemImage: "trash", role: .destructive) { model.faceToRemove = face }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("登録した顔の写真")
-        .accessibilityAction(named: "登録を削除") { model.removeRegistered(face) }
+        .accessibilityAction(named: "登録を削除") { model.faceToRemove = face }
     }
 }
 
@@ -182,7 +193,7 @@ private struct StickerSettings: View {
                             .onHover { model.hoveredSticker = $0 ? item.id : (model.hoveredSticker == item.id ? nil : model.hoveredSticker) }
                             .animation(.easeOut(duration: 0.12), value: hovered)
                             .contextMenu {
-                                Button("削除", systemImage: "trash", role: .destructive) { model.stickerToRemove = item }
+                                Button("削除…", systemImage: "trash", role: .destructive) { model.stickerToRemove = item }
                             }
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel("スタンプ \(i + 1)")
@@ -196,7 +207,7 @@ private struct StickerSettings: View {
             } footer: {
                 Text(model.stickerLibrary.isEmpty
                      ? "画像はこのMacの中だけに保存され、どこにも送信されません。"
-                     : "追加は、メイン画面の人の一覧で、隠す人の「隠し方」メニューから画像を選びます。削除は、ポインタを重ねると出る × か、右クリックから。削除すると、使っていた人は基本の隠し方（モザイクかぼかし）に戻ります。削除は取り消せません。メイン画面の人の一覧の「隠し方」メニューの「保存したスタンプを削除」からも削除できます。画像はこのMacの中だけに保存され、どこにも送信されません。")
+                     : "追加は人の一覧の「隠し方」メニューから。削除は × か右クリックで（取り消せず、使っていた人は基本の隠し方に戻ります）。画像はこのMacの中だけに保存され、どこにも送信されません。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

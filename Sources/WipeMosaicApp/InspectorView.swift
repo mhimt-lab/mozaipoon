@@ -407,12 +407,19 @@ struct ExportSection: View {
             case .writing(let p):
                 // No second bar here: the export's bar and Cancel are at the foot of the
                 // sidebar, always in sight. Cancel is kept here too, where the eyes are.
-                HStack {
-                    Label("書き出しています \(Int(p * 100))%", systemImage: "square.and.arrow.up")
-                        .monospacedDigit()
-                    Spacer()
-                    Button((model.exportProgress?.total ?? 1) > 1 ? "すべて中止" : "中止", role: .cancel) { model.cancelExports() }
-                        .buttonStyle(.bordered)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("書き出し中 \(Int(p * 100))%", systemImage: "square.and.arrow.up")
+                            .monospacedDigit()
+                        Spacer()
+                        Button((model.exportProgress?.total ?? 1) > 1 ? "すべて中止" : "中止") { model.cancelExports() }
+                            .buttonStyle(.bordered)
+                    }
+                    // The choices are fixed when the export starts, while the list stays editable.
+                    Text("書き出しを始めたときの選択で書き出します。いまからの変更は入りません。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 4)
             case .queued:
@@ -463,7 +470,7 @@ struct ExportSection: View {
             }
             if video.resultIsStale(model.mosaicParams) {
                 Label {
-                    Text("書き出した後に変更があります。反映するには、もう一度書き出してください。")
+                    Text("書き出しを始めた後に変更があります。反映するには、もう一度書き出してください。")
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 }
@@ -511,7 +518,8 @@ struct ExportSection: View {
                                 Image(systemName: "play.circle")
                                 Text("\(formatTime(d.start)) – \(formatTime(d.end))").monospacedDigit()
                                 Spacer()
-                                Text("隠す顔 \(d.around) → \(d.count)").foregroundStyle(.secondary).monospacedDigit()
+                                // The fixed label color: `.secondary` would resolve against the accent around it.
+                                Text("隠す顔 \(d.around) → \(d.count)").foregroundStyle(Color.secondary).monospacedDigit()
                             }
                             .foregroundStyle(Color.accentColor)
                             .padding(.vertical, 3)

@@ -18,7 +18,12 @@ struct ExportSheet: View {
 
             // Before the list, where it is read before pressing the button.
             VStack(alignment: .leading, spacing: 6) {
-                sheetWarning("自動で見つからなかった顔や文字は隠れません。公開する前に、書き出した動画を最後まで確かめてください。")
+                // Said every time, so not a warning: the orange triangle is kept for what is
+                // particular to these videos.
+                Label("自動で見つからなかった顔や文字は隠れません。公開する前に、書き出した動画を最後まで確かめてください。", systemImage: "info.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 if !missingWords.isEmpty {
                     sheetWarning("隠す言葉\(missingWords.map { "「\($0)」" }.joined())は、どの動画でも見つかっていません。字の違い（高／髙など）や読み違いがないか確かめてください。")
                 }

@@ -68,21 +68,26 @@ struct PurposeSheet: View {
                     .frame(width: 32)
                     .foregroundStyle(Color.accentColor)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(p.title).font(.headline)
+                    // The note on the title's line, so the description below keeps the full
+                    // width (and wraps the same) whichever choice carries it.
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(p.title).font(.headline)
+                        Spacer(minLength: 8)
+                        if isDefault {
+                            // Return repeats the last choice: said, not shown as already chosen
+                            // (a screen recording would otherwise look set to faces).
+                            Text("前回と同じ ⏎")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize()
+                        }
+                    }
                     Text(p.detail)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
-                if isDefault {
-                    // Return repeats the last choice: said, not shown as already chosen (a
-                    // screen recording would otherwise look set to faces).
-                    Text("前回と同じ ⏎")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                }
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -100,7 +105,8 @@ private struct OptionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(
-                .quaternary.opacity(configuration.isPressed ? 1 : hovered ? 0.7 : 0.4),
+                configuration.isPressed ? AnyShapeStyle(.tertiary)
+                    : AnyShapeStyle(.quaternary.opacity(hovered ? 1 : 0.4)),
                 in: .rect(cornerRadius: 10))
             .animation(.easeOut(duration: 0.1), value: hovered)
     }

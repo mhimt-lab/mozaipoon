@@ -371,7 +371,7 @@ private struct TextLineRow: View {
             Spacer(minLength: 0)
             // Room kept when not hidden too, so the times line up in one column.
             Image(systemName: "eye.slash")
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(.secondary)  // a state mark, not a button
                 .opacity(whole || partly ? 1 : 0)
                 .help(whole ? "行全体を隠しています" : partly ? "一部を隠しています" : "")
                 .accessibilityHidden(!(whole || partly))

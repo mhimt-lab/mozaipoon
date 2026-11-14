@@ -99,7 +99,7 @@ private struct AppCommands: Commands {
             Divider()
             // Instead of SidebarCommands() / InspectorCommands(): their items read "インスペクタを
             // Hide" (the verb not localized) under a doubled separator.
-            Button(model.showSidebar ? "動画の一覧を隠す" : "動画の一覧を表示") { model.showSidebar.toggle() }
+            Button(model.showSidebar ? "動画の一覧を閉じる" : "動画の一覧を開く") { model.showSidebar.toggle() }
                 .keyboardShortcut("s", modifiers: [.control, .command])
                 .disabled(model.videos.isEmpty)
             Button(model.showInspector ? "隠すものの欄を閉じる" : "隠すものの欄を開く") { model.showInspector.toggle() }
@@ -141,7 +141,7 @@ private struct AppCommands: Commands {
             Button("全員を隠すのをやめる") { model.clearAll() }
                 .disabled(model.current?.selected.isEmpty != false)
             Divider()
-            Button("顔を探し直す") { model.reanalyze() }
+            Button(model.current?.analysis == nil ? "顔を探す" : "顔を探し直す") { model.reanalyze() }
                 .disabled(!model.hasVideo || model.current?.analyzing != nil || model.current?.job.isActive == true)
         }
     }
