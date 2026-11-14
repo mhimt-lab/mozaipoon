@@ -17,12 +17,12 @@ struct InspectorView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             Picker("隠すもの", selection: $model.inspectorTab) {
-                Text("人の顔").tag(InspectorTab.people)
                 Text("画面の文字").tag(InspectorTab.text)
+                Text("人の顔").tag(InspectorTab.people)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .help("人の顔：映っている人を選んで隠します／画面の文字：画面録画に映る電話番号や名前などを隠します")
+            .help("画面の文字：画面録画に映る電話番号や名前などを隠します／人の顔：映っている人を選んで隠します")
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }

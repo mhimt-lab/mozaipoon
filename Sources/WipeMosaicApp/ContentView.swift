@@ -204,7 +204,7 @@ private struct EmptyStateView: View {
             }
             VStack(alignment: .leading, spacing: 16) {
                 Step(number: 1, title: "動画を追加", detail: "何本でもまとめて追加できます。")
-                Step(number: 2, title: "何を隠すか選ぶ", detail: "人の顔、または画面に映る電話番号・名前などの文字。顔は人ごとに並べて、隠す人を選べます。")
+                Step(number: 2, title: "何を隠すか選ぶ", detail: "画面に映る電話番号・名前などの文字、または人の顔。顔は人ごとに並べて、隠す人を選べます。")
                 Step(number: 3, title: "確かめて書き出す", detail: "選んだものだけをモザイクやぼかしで隠します。画質は元の動画のままです。")
             }
             .frame(maxWidth: 420, alignment: .leading)

@@ -10,7 +10,7 @@ enum AnalysisState: Equatable {
 
 /// What the user wants to hide in a video, chosen when it is added.
 enum Purpose: String, CaseIterable {
-    case faces, text, both
+    case text, faces, both  // the order offered when videos are added
     var findsFaces: Bool { self != .text }
     var readsText: Bool { self != .faces }
 }

@@ -25,7 +25,7 @@ enum Accuracy: Int, CaseIterable, Identifiable {
 
 /// What the inspector lists.
 enum InspectorTab: Hashable {
-    case people, text
+    case text, people
 }
 
 /// What the viewer shows.
@@ -138,7 +138,7 @@ final class AppModel {
     /// Videos just added, waiting for the user to choose what to hide in them.
     var pendingPurpose: [UUID] = []
     /// The last choice, offered first next time.
-    var lastPurpose: Purpose = Purpose(rawValue: UserDefaults.standard.string(forKey: "purpose") ?? "") ?? .faces {
+    var lastPurpose: Purpose = Purpose(rawValue: UserDefaults.standard.string(forKey: "purpose") ?? "") ?? .text {
         didSet { UserDefaults.standard.set(lastPurpose.rawValue, forKey: "purpose") }
     }
     var dropTargeted = false
@@ -161,7 +161,7 @@ final class AppModel {
         didSet { UserDefaults.standard.set(mosaicExpanded, forKey: "mosaicExpanded") }
     }
     var showInspector = true
-    var inspectorTab: InspectorTab = .people
+    var inspectorTab: InspectorTab = .text
     /// A new empty word field is shown in the text tab ("＋"), and whether its rarely seen
     /// lines are shown.
     var addingTextWord = false

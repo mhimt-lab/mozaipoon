@@ -3,22 +3,22 @@ import SwiftUI
 extension Purpose {
     var title: String {
         switch self {
-        case .faces: "人の顔"
         case .text: "画面の文字"
+        case .faces: "人の顔"
         case .both: "両方"
         }
     }
     var detail: String {
         switch self {
-        case .faces: "映っている人を探して、選んだ人の顔を隠します。"
         case .text: "画面録画や、スマホなどの画面を撮った動画に映る電話番号・名前などを隠します。"
-        case .both: "顔と画面の文字の両方を探します。同時に進めるので、片方だけより時間がかかります。"
+        case .faces: "映っている人を探して、選んだ人の顔を隠します。"
+        case .both: "画面の文字と顔の両方を探します。同時に進めるので、片方だけより時間がかかります。"
         }
     }
     var symbol: String {
         switch self {
-        case .faces: "person.2.crop.square.stack"
         case .text: "text.viewfinder"
+        case .faces: "person.2.crop.square.stack"
         case .both: "square.stack.3d.up"
         }
     }
@@ -35,8 +35,8 @@ struct PurposeSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("何を隠しますか？").font(.title2.bold())
                 Text(count > 1
-                     ? "追加した\(count)本の動画に使います。あとから右の欄の「人の顔」「画面の文字」で、もう一方も探せます。"
-                     : "あとから右の欄の「人の顔」「画面の文字」で、もう一方も探せます。")
+                     ? "追加した\(count)本の動画に使います。あとから右の欄の「画面の文字」「人の顔」で、もう一方も探せます。"
+                     : "あとから右の欄の「画面の文字」「人の顔」で、もう一方も探せます。")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
