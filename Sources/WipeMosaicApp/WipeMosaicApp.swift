@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 
-@main
 struct WipeMosaicApp: App {
     // @State needs the SwiftUI macro plugin, which Command Line Tools lack; the App is created once.
     private let model: AppModel

@@ -397,13 +397,15 @@ public func withText(_ faces: [FrameFaces], text: ScreenText, mask: TextMask) ->
 
 // MARK: - Analysis
 
-/// Decode every frame and recognize the text on screen. Recognition (~150–300 ms per frame)
+/// Decode every frame and recognize the text on screen. Recognition (~80–250 ms per frame)
 /// runs when the picture changed, at most every `interval` seconds, and at least every
 /// `recheck` seconds (a change too small for the thumbnail, such as one digit, is read then);
-/// lines are followed between recognized frames by interpolation. `progress` gets the number
-/// of decoded frames.
+/// lines are followed between recognized frames by interpolation. With `workers` > 1 the
+/// frames are read by that many worker processes (see TextWorkers.swift; the result is the
+/// same). `progress` gets the number of frames done.
 public func analyzeText(
-    asset: AVURLAsset, info: VideoInfo, interval: Double = 0.1, recheck: Double = 1, progress: (Int) -> Void
+    asset: AVURLAsset, info: VideoInfo, interval: Double = 0.1, recheck: Double = 1, workers: Int = 0,
+    progress: (Int) -> Void
 ) throws -> ScreenText {
     let bounds = CGRect(origin: .zero, size: info.size)
     var builder = TrackBuilder(size: info.size)
@@ -415,6 +417,52 @@ public func analyzeText(
     var lastLines: [(CGRect, VNRecognizedText)] = []
     var unchangedUntil: Int?  // last frame identical to the last recognized one
 
+    var pool: TextWorkerPool?
+    if workers > 1, let exe = Bundle.main.executableURL {
+        pool = try TextWorkerPool(executable: exe, video: asset.url, count: workers)
+    }
+    defer { pool?.terminate() }
+    // What to add to the tracks, in order. A reading done by a worker is applied when it
+    // arrives and everything before it has been applied.
+    enum Step { case pin(Int), read(frame: Int, job: Int, newSince: Int?) }
+    var steps: [Step] = []
+    var applied = 0  // steps[..<applied] are in the tracks
+    var jobs = 0
+    var ownReading: TextReading?  // read in this process (no workers)
+    /// Applies the next step; false when it is a worker's reading that has not arrived.
+    func step(blocking: Bool) throws -> Bool {
+        switch steps[applied] {
+        case .pin(let u):
+            builder.add(frame: u, lines: lastLines, pin: true)
+        case .read(let f, let job, let since):
+            let reading: TextReading
+            if let pool {
+                guard let r = blocking ? try pool.wait(job) : try pool.take(job) else { return false }
+                reading = r
+            } else {
+                reading = ownReading!
+                ownReading = nil
+            }
+            lastLines = textLines(reading, bounds: bounds)
+            // Read again only because time passed: a new line was there since the last
+            // reading, too small a change to see (the picture looked the same).
+            builder.add(frame: f, lines: lastLines, newSince: since)
+        }
+        applied += 1
+        if applied == steps.count || applied >= 1024 {
+            steps.removeFirst(applied)
+            applied = 0
+        }
+        return true
+    }
+    func done(decoded: Int) -> Int {
+        guard applied < steps.count else { return decoded }
+        switch steps[applied] {
+        case .pin(let u): return u
+        case .read(let f, _, _): return f
+        }
+    }
+
     try forEachFrame(asset: asset, info: info) { i, t, image in
         times.append(t)
         let thumb = thumbnail(image, ctx)
@@ -423,19 +471,31 @@ public func analyzeText(
             unchangedUntil = i
         } else if t - lastTime >= interval - 1e-6 {
             // Pin the lines where they were until the picture started to change.
-            if let u = unchangedUntil, u > lastRecognized { builder.add(frame: u, lines: lastLines, pin: true) }
-            lastLines = try recognizeLines(image, bounds: bounds)
-            // Read again only because time passed: a new line was there since the last reading,
-            // too small a change to see (the picture looked the same).
-            builder.add(frame: i, lines: lastLines, newSince: unchanged ? lastRecognized + 1 : nil)
+            if let u = unchangedUntil, u > lastRecognized { steps.append(.pin(u)) }
+            if let pool {
+                // Keep a few readings per worker in flight; more would only pile up results.
+                while steps.count - applied >= 8 * workers { _ = try step(blocking: true) }
+                try pool.submit(job: jobs, frame: i)
+            } else {
+                ownReading = try recognizeText(image)
+            }
+            steps.append(.read(frame: i, job: jobs, newSince: unchanged ? lastRecognized + 1 : nil))
+            jobs += 1
             lastRecognized = i
             lastTime = t
             lastThumb = thumb
             unchangedUntil = nil
         }
-        progress(i + 1)
+        while applied < steps.count, try step(blocking: false) {}
+        progress(done(decoded: i + 1))
     }
-    if let u = unchangedUntil, u > lastRecognized { builder.add(frame: u, lines: lastLines, pin: true) }
+    if let u = unchangedUntil, u > lastRecognized { steps.append(.pin(u)) }
+    pool?.finish()
+    while applied < steps.count {
+        _ = try step(blocking: true)
+        progress(done(decoded: times.count))
+    }
+    progress(times.count)
 
     var tracks = builder.tracks
     for k in tracks.indices {
@@ -465,17 +525,21 @@ public func analyzeText(
     return ScreenText(times: times, fps: info.fps, size: info.size, tracks: tracks, entries: entries, extend: interval + 0.25)
 }
 
-private func recognizeLines(_ image: CIImage, bounds: CGRect) throws -> [(CGRect, VNRecognizedText)] {
+func recognizeText(_ image: CIImage) throws -> TextReading {
     let req = VNRecognizeTextRequest()
     req.recognitionLevel = .accurate  // .fast does not read Japanese
     req.recognitionLanguages = ["ja-JP", "en-US"]
     req.usesLanguageCorrection = false  // keeps numbers and addresses as written
     try VNImageRequestHandler(ciImage: image, orientation: .up, options: [:]).perform([req])
-    let w = Int(image.extent.width), h = Int(image.extent.height)
-    return (req.results ?? []).compactMap { o in
+    return TextReading(width: Int(image.extent.width), height: Int(image.extent.height), observations: req.results ?? [])
+}
+
+/// The lines of one reading: box in the frame and the best candidate.
+private func textLines(_ r: TextReading, bounds: CGRect) -> [(CGRect, VNRecognizedText)] {
+    r.observations.compactMap { o in
         guard let c = o.topCandidates(1).first, !c.string.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        let r = VNImageRectForNormalizedRect(o.boundingBox, w, h).intersection(bounds)
-        return r.isEmpty ? nil : (r, c)
+        let rect = VNImageRectForNormalizedRect(o.boundingBox, r.width, r.height).intersection(bounds)
+        return rect.isEmpty ? nil : (rect, c)
     }
 }
 

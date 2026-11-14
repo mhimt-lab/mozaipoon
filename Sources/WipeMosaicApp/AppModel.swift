@@ -793,7 +793,7 @@ final class AppModel {
             let total = max(1, Int((i.fps * i.duration).rounded()))
             var last = Date.distantPast
             do {
-                let text = try analyzeText(asset: a, info: i) { n in
+                let text = try analyzeText(asset: a, info: i, workers: textWorkerCount()) { n in
                     let now = Date()
                     guard now.timeIntervalSince(last) > 0.1 else { return }
                     last = now

@@ -1,6 +1,9 @@
 import Foundation
 import WipeMosaicCore
 
+// A text worker started by `analyzeText` runs and exits here.
+runTextWorkerIfRequested()
+
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data("error: \(message)\n".utf8))
     exit(1)

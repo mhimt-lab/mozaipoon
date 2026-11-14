@@ -74,7 +74,7 @@ func runMosaic(_ o: RunOptions) async throws {
     }
     if o.common.screenText {
         print("pass 1/2: reading on-screen text")
-        let text = try analyzeText(asset: asset, info: info, progress: report)
+        let text = try analyzeText(asset: asset, info: info, workers: textWorkerCount(), progress: report)
         try checkLines(o.common.textLines, in: text)
         let options = TextMaskOptions(kinds: o.common.textKinds, words: o.common.textWords, lines: o.common.textLines, all: o.common.textAll)
         let mask = text.mask(options)
@@ -229,7 +229,7 @@ func listText(input: URL, options: TextMaskOptions, list: Bool) async throws {
     let asset = AVURLAsset(url: input)
     let info = try await loadVideo(asset)
     let started = Date()
-    let text = try analyzeText(asset: asset, info: info) { _ in }
+    let text = try analyzeText(asset: asset, info: info, workers: textWorkerCount()) { _ in }
     let elapsed = Date().timeIntervalSince(started)
     try checkLines(options.lines, in: text)
     let mask = text.mask(options)
