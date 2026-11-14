@@ -43,14 +43,12 @@ struct PurposeSheet: View {
             ForEach(Purpose.allCases, id: \.self) { p in
                 option(p)
             }
+            // Cancel steps back, so it sits on the leading side (HIG); the choices above go forward.
             HStack {
-                Text("Return キーで前回と同じ「\(model.lastPurpose.title)」を選びます")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Spacer()
                 Button("キャンセル", role: .cancel) { model.cancelPurpose() }
                     .keyboardShortcut(.cancelAction)
                     .help("動画を追加せずに閉じます（esc）")
+                Spacer()
             }
         }
         .padding(24)
