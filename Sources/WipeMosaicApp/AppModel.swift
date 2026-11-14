@@ -478,7 +478,7 @@ final class AppModel {
                     v.asset = AVURLAsset(url: mov)
                     i = try await loadVideo(v.asset)
                 }
-                // Removed meanwhile ("追加しない" in the sheet, or taken off the list).
+                // Removed meanwhile ("キャンセル" in the sheet, or taken off the list).
                 guard videos.contains(where: { $0.id == v.id }) else { return }
                 let item = AVPlayerItem(asset: v.asset)
                 let comp = try await v.live.composition(for: v.asset)

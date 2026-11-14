@@ -48,8 +48,9 @@ struct PurposeSheet: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("追加しない", role: .cancel) { model.cancelPurpose() }
+                Button("キャンセル", role: .cancel) { model.cancelPurpose() }
                     .keyboardShortcut(.cancelAction)
+                    .help("動画を追加せずに閉じます（esc）")
             }
         }
         .padding(24)
