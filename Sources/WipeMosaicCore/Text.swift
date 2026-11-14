@@ -397,7 +397,7 @@ public func withText(_ faces: [FrameFaces], text: ScreenText, mask: TextMask) ->
 
 // MARK: - Analysis
 
-/// Decode every frame and recognize the text on screen. Recognition (~80–250 ms per frame)
+/// Decode every frame and recognize the text on screen. Recognition (~80–330 ms per frame)
 /// runs when the picture changed, at most every `interval` seconds, and at least every
 /// `recheck` seconds (a change too small for the thumbnail, such as one digit, is read then);
 /// lines are followed between recognized frames by interpolation. With `workers` > 1 the
@@ -438,6 +438,10 @@ public func analyzeText(
             let reading: TextReading
             if let pool {
                 guard let r = blocking ? try pool.wait(job) : try pool.take(job) else { return false }
+                // The worker decodes the video on its own: make sure it read this very frame.
+                guard r.frame == f, r.time == times[f] else {
+                    throw ToolError("文字を読み取る処理が別のフレームを読みました（\(f) 番目のフレーム \(times[f]) 秒に \(r.frame) 番目 \(r.time) 秒）")
+                }
                 reading = r
             } else {
                 reading = ownReading!
@@ -477,7 +481,7 @@ public func analyzeText(
                 while steps.count - applied >= 8 * workers { _ = try step(blocking: true) }
                 try pool.submit(job: jobs, frame: i)
             } else {
-                ownReading = try recognizeText(image)
+                ownReading = try recognizeText(image, frame: i, time: t)
             }
             steps.append(.read(frame: i, job: jobs, newSince: unchanged ? lastRecognized + 1 : nil))
             jobs += 1
@@ -525,13 +529,14 @@ public func analyzeText(
     return ScreenText(times: times, fps: info.fps, size: info.size, tracks: tracks, entries: entries, extend: interval + 0.25)
 }
 
-func recognizeText(_ image: CIImage) throws -> TextReading {
+func recognizeText(_ image: CIImage, frame: Int, time: Double) throws -> TextReading {
     let req = VNRecognizeTextRequest()
     req.recognitionLevel = .accurate  // .fast does not read Japanese
     req.recognitionLanguages = ["ja-JP", "en-US"]
     req.usesLanguageCorrection = false  // keeps numbers and addresses as written
     try VNImageRequestHandler(ciImage: image, orientation: .up, options: [:]).perform([req])
-    return TextReading(width: Int(image.extent.width), height: Int(image.extent.height), observations: req.results ?? [])
+    return TextReading(
+        frame: frame, time: time, width: Int(image.extent.width), height: Int(image.extent.height), observations: req.results ?? [])
 }
 
 /// The lines of one reading: box in the frame and the best candidate.

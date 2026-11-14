@@ -20,10 +20,10 @@ import Vision
 public let textWorkerArgument = "--wipe-mosaic-text-worker"
 
 /// Worker processes for `analyzeText`: 4 on a Mac with 16 GB or more and 8 or more cores
-/// (each takes up to ~300 MB), 2 with 8 GB, else none. `WIPE_MOSAIC_TEXT_WORKERS` overrides
-/// it (0 or 1: read in this process).
+/// (each took up to ~130 MB with 1080p and 2560×1600 videos), 2 with 8 GB and 4 cores, else
+/// none. `WIPE_MOSAIC_TEXT_WORKERS` overrides it (0 or 1: read in this process; at most 16).
 public func textWorkerCount() -> Int {
-    if let s = ProcessInfo.processInfo.environment["WIPE_MOSAIC_TEXT_WORKERS"], let n = Int(s) { return max(0, n) }
+    if let s = ProcessInfo.processInfo.environment["WIPE_MOSAIC_TEXT_WORKERS"], let n = Int(s) { return min(max(0, n), 16) }
     let memory = ProcessInfo.processInfo.physicalMemory
     let cores = ProcessInfo.processInfo.activeProcessorCount
     if memory >= 16 << 30, cores >= 8 { return 4 }
@@ -45,8 +45,11 @@ public func runTextWorkerIfRequested() {
     }
 }
 
-/// One recognition: the observations and the size of the image they were read from.
+/// One recognition: the frame (index and time, to check that a worker read the frame it was
+/// asked for), the size of the image and the observations.
 struct TextReading {
+    let frame: Int
+    let time: Double
     let width: Int
     let height: Int
     let observations: [VNRecognizedTextObservation]
@@ -55,8 +58,8 @@ struct TextReading {
 private struct StopDecoding: Error {}
 
 /// Reads "job frame" lines from stdin (frames in increasing order), recognizes each frame and
-/// writes the results to stdout: job, frame, width, height and byte count (Int64 each, little
-/// endian), then the archived observations.
+/// writes the results to stdout: job, frame, the frame's time (the bits of the Double), width,
+/// height and byte count (Int64 each, little endian), then the archived observations.
 private func textWorkerMain(video: URL) throws {
     let asset = AVURLAsset(url: video)
     let info = try waitFor { try await loadVideo(asset) }
@@ -70,12 +73,12 @@ private func textWorkerMain(video: URL) throws {
     guard target != nil else { return }
     let out = FileHandle.standardOutput
     do {
-        try forEachFrame(asset: asset, info: info) { i, _, image in
+        try forEachFrame(asset: asset, info: info) { i, time, image in
             while let t = target, t.frame == i {
-                let reading = try recognizeText(image)
+                let reading = try recognizeText(image, frame: i, time: time)
                 let data = try NSKeyedArchiver.archivedData(withRootObject: reading.observations, requiringSecureCoding: true)
                 var header = Data()
-                for v in [t.job, t.frame, reading.width, reading.height, data.count] {
+                for v in [t.job, t.frame, Int(Int64(bitPattern: time.bitPattern)), reading.width, reading.height, data.count] {
                     withUnsafeBytes(of: Int64(v).littleEndian) { header.append(contentsOf: $0) }
                 }
                 try out.write(contentsOf: header + data)
@@ -131,7 +134,7 @@ final class TextWorkerPool: @unchecked Sendable {
                 try p.run()
             } catch {
                 for q in processes { q.terminate() }
-                throw error
+                throw ToolError("文字を読み取る処理を始められません（アプリを移動したり入れ替えたりしたときは、アプリを開き直してください）: \(error.localizedDescription)")
             }
             // Writing to a worker that died must fail that write, not kill this process (the
             // app) with SIGPIPE.
@@ -181,9 +184,12 @@ final class TextWorkerPool: @unchecked Sendable {
     func wait(_ job: Int) throws -> TextReading {
         state.lock()
         defer { state.unlock() }
+        // A reading takes well under a second; a worker silent this long is stuck.
+        let deadline = Date(timeIntervalSinceNow: 120)
         while true {
             if let r = try available(job) { return r }
             if Task.isCancelled { throw CancellationError() }
+            if Date() > deadline { throw ToolError("文字を読み取る処理 \(job % inputs.count + 1) が 2 分以上応答しません") }
             _ = state.wait(until: Date(timeIntervalSinceNow: 0.2))
         }
     }
@@ -222,9 +228,13 @@ final class TextWorkerPool: @unchecked Sendable {
             return data
         }
         do {
-            while let header = try exactly(40) {
-                let v = (0..<5).map { i in header.withUnsafeBytes { Int(Int64(littleEndian: $0.loadUnaligned(fromByteOffset: i * 8, as: Int64.self))) } }
-                guard let body = try exactly(v[4]) else { break }
+            while let header = try exactly(48) {
+                let v = (0..<6).map { i in header.withUnsafeBytes { Int64(littleEndian: $0.loadUnaligned(fromByteOffset: i * 8, as: Int64.self)) } }
+                // Anything else written to stdout would show up here as a nonsense header.
+                guard v[0] >= 0, v[0] % Int64(inputs.count) == Int64(k), v[1] >= 0, v[3] > 0, v[4] > 0,
+                    (0...(256 << 20)).contains(v[5])
+                else { throw ToolError("unexpected output: \(v)") }
+                guard let body = try exactly(Int(v[5])) else { break }
                 // Our own child wrote this archive; secure decoding rejects the observations'
                 // nested time range, so it is decoded without it.
                 let u = try NSKeyedUnarchiver(forReadingFrom: body)
@@ -232,8 +242,11 @@ final class TextWorkerPool: @unchecked Sendable {
                 guard let obs = u.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? [VNRecognizedTextObservation] else {
                     throw ToolError("unreadable result for frame \(v[1])")
                 }
+                let reading = TextReading(
+                    frame: Int(v[1]), time: Double(bitPattern: UInt64(bitPattern: v[2])), width: Int(v[3]), height: Int(v[4]),
+                    observations: obs)
                 state.withLock {
-                    results[v[0]] = TextReading(width: v[2], height: v[3], observations: obs)
+                    results[Int(v[0])] = reading
                     state.broadcast()
                 }
             }
