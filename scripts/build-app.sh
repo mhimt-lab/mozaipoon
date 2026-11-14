@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 ARCHS=(--arch arm64 --arch x86_64)
 swift build -c release "${ARCHS[@]}" --product WipeMosaic
 BIN=$(swift build -c release "${ARCHS[@]}" --product WipeMosaic --show-bin-path)
-VERSION=1.2.2
+VERSION=1.3
 
 APP=build/モザイぷーん.app
 rm -rf "$APP"
