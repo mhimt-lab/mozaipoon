@@ -151,8 +151,28 @@ final class AppModel {
     @ObservationIgnored let player = AVPlayer()
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
+    /// Time of the frame on screen (the face boxes and text outlines follow it).
     var currentTime: Double = 0
+    /// Where a seek is going. The playhead and the time shown follow it at once, while the
+    /// picture follows as fast as the decoder can (see `seek(to:)`).
+    private(set) var pendingSeek: Double?
+    @ObservationIgnored private var seeking = false
+    /// Playhead position: where the user is going, else the frame on screen.
+    var playheadTime: Double { pendingSeek ?? currentTime }
     var isPlaying = false
+    /// Playback speed (1 = normal), kept by every `play()` through `defaultRate`.
+    var playbackRate: Float = 1 {
+        didSet {
+            player.defaultRate = playbackRate
+            if isPlaying { player.rate = playbackRate }
+        }
+    }
+    static let playbackRates: [Float] = [0.5, 1, 1.5, 2]
+    /// Time under the pointer on the timeline (shown in a label while hovering).
+    var timelineHover: Double?
+    /// The main window, for the player keys (`handleKey`).
+    @ObservationIgnored weak var mainWindow: NSWindow?
+    @ObservationIgnored private var keyMonitor: Any?
     var viewMode: ViewMode = .mosaic {
         didSet { if oldValue != viewMode { applyViewMode() } }
     }
@@ -197,6 +217,12 @@ final class AppModel {
 
     init() {
         Remux.removeAll()
+        // Local monitors run on the main thread.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            nonisolated(unsafe) let event = e
+            let handled = MainActor.assumeIsolated { self?.handleKey(event) == true }
+            return handled ? nil : e
+        }
         Task.detached(priority: .userInitiated) { [weak self] in
             weak let model = self
             let items = StickerStore.loadAll()
@@ -970,8 +996,11 @@ final class AppModel {
 
     /// Show the current video in the player, at the position it was left.
     private func showCurrent(previous: UUID?) {
-        if let previous, let old = videos.first(where: { $0.id == previous }) { old.lastTime = currentTime }
+        let left = cancelPendingSeek() ?? currentTime
+        if let previous, let old = videos.first(where: { $0.id == previous }) { old.lastTime = left }
         player.pause()
+        playbackRate = 1  // a faster speed is easy to forget; each video starts at normal speed
+        timelineHover = nil  // the timeline is rebuilt for the new video without a hover end
         guard let v = current, v.isReady else {
             player.replaceCurrentItem(with: nil)
             currentTime = 0
@@ -981,7 +1010,7 @@ final class AppModel {
         let target = viewMode == .result ? v.resultItem : v.sourceItem
         if player.currentItem !== target { player.replaceCurrentItem(with: target) }
         let t = v.lastTime
-        player.seek(to: CMTime(seconds: t, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        player.seek(to: cmTime(t), toleranceBefore: .zero, toleranceAfter: .zero)
         currentTime = t
         refreshLive()
         processQueue()  // the shown video goes first in the queue
@@ -989,7 +1018,7 @@ final class AppModel {
 
     private func applyViewMode() {
         guard let v = current else { return }
-        let t = player.currentTime()
+        let t = cancelPendingSeek().map(cmTime) ?? player.currentTime()
         let wasPlaying = isPlaying
         let target = viewMode == .result ? v.resultItem : v.sourceItem
         if let target, player.currentItem !== target {
@@ -1002,6 +1031,11 @@ final class AppModel {
 
     func togglePlay() {
         guard player.currentItem != nil else { return }
+        if let t = cancelPendingSeek() {
+            // Play from where the playhead was dragged, not from the frame still on screen.
+            player.seek(to: cmTime(t), toleranceBefore: .zero, toleranceAfter: .zero)
+            currentTime = t
+        }
         if isPlaying {
             player.pause()
         } else {
@@ -1012,10 +1046,89 @@ final class AppModel {
         }
     }
 
+    /// Go to `t` exactly. Seeks are chased (Apple QA1820): one at a time, each to the latest
+    /// time asked, so dragging the playhead never queues up seeks behind a slow decoder.
+    /// Exact seeks also on long-GOP video: the frame shown must be the one at the playhead, with
+    /// its own mosaic and face boxes.
     func seek(to t: Double) {
         player.pause()
-        player.seek(to: CMTime(seconds: t, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-        currentTime = t
+        pendingSeek = t
+        guard !seeking else { return }
+        seeking = true
+        Task {
+            while let target = pendingSeek {
+                _ = await player.seek(to: cmTime(target), toleranceBefore: .zero, toleranceAfter: .zero)
+                if pendingSeek == target { pendingSeek = nil }
+            }
+            let now = player.currentTime().seconds
+            if now.isFinite { currentTime = now }
+            seeking = false
+        }
+    }
+
+    /// Drops a seek not yet done; returns where it was going.
+    private func cancelPendingSeek() -> Double? {
+        defer { pendingSeek = nil }
+        return pendingSeek
+    }
+
+    /// `t` in the video track's time scale, so that a frame's time maps back to exactly that
+    /// frame (with 1/600 s, a 59.94 fps frame time can round to just before the frame, and an
+    /// exact seek then shows the frame before).
+    private func cmTime(_ t: Double) -> CMTime {
+        CMTime(seconds: t, preferredTimescale: max(600, current?.info?.timeScale ?? 600))
+    }
+
+    /// L: play, or play faster when already playing (up to 2×).
+    func faster() {
+        guard player.currentItem != nil else { return }
+        if isPlaying, let next = Self.playbackRates.first(where: { $0 > playbackRate }) {
+            playbackRate = next
+        } else if !isPlaying {
+            togglePlay()
+        }
+    }
+
+    /// The dips of the exported file before or after the playhead, for the Play menu.
+    func dip(after: Bool) -> Dip? {
+        guard let dips = current?.summary?.dips, !dips.isEmpty else { return nil }
+        let t = playheadTime
+        if after { return dips.first { $0.start > t + 0.01 } }
+        return dips.last { $0.start < t - 0.01 }
+    }
+
+    /// Player keys in the main window, as in QuickTime Player: Space play/pause, ←/→ one frame,
+    /// ⇧←/⇧→ one second, K pause, L play (faster). Not while typing (Space also converts kana),
+    /// in a sheet or another window, or on a control that uses the key itself.
+    private func handleKey(_ e: NSEvent) -> Bool {
+        guard let w = e.window, w === mainWindow, w.attachedSheet == nil, hasVideo, player.currentItem != nil,
+            e.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        else { return false }
+        let responder = w.firstResponder
+        if responder is NSTextView { return false }  // a text field is being edited
+        if let input = responder as? NSTextInputClient, input.hasMarkedText() { return false }
+        let shift = e.modifierFlags.contains(.shift)
+        switch e.keyCode {
+        case 49:  // Space
+            if responder is NSButton { return false }  // pressing the focused button (Full Keyboard Access)
+            togglePlay()
+        case 123, 124:  // ← →
+            if responder is NSSlider || responder is NSStepper || responder is NSSegmentedControl { return false }
+            let forward = e.keyCode == 124
+            if shift {
+                let d = player.currentItem?.duration.seconds ?? 0
+                seek(to: min(max(playheadTime + (forward ? 1 : -1), 0), d.isFinite ? d : playheadTime))
+            } else {
+                step(forward ? 1 : -1)
+            }
+        default:
+            switch e.charactersIgnoringModifiers?.lowercased() {
+            case "k": player.pause()
+            case "l": faster()
+            default: return false
+            }
+        }
+        return true
     }
 
     /// Selecting a person in the list shows them: if they are not on screen at the current
@@ -1039,6 +1152,11 @@ final class AppModel {
     /// Step one frame (AVPlayerItem.step keeps the composition's mosaic in sync).
     func step(_ frames: Int) {
         player.pause()
+        // Still seeking: step from where the playhead is going, not from the frame on screen.
+        if let t = cancelPendingSeek(), let fps = current?.info?.fps, fps > 0 {
+            seek(to: t + Double(frames) / fps)
+            return
+        }
         player.currentItem?.step(byCount: frames)
     }
 

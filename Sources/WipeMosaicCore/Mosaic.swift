@@ -54,6 +54,8 @@ public struct VideoInfo: @unchecked Sendable {
     public let transform: CGAffineTransform
     public let duration: Double
     public let fps: Double
+    /// The track's time scale: frame times converted to it map back to exactly those frames.
+    public let timeScale: CMTimeScale
 }
 
 /// Map a track's preferredTransform to the orientation that makes stored frames upright.
@@ -78,13 +80,14 @@ public func loadVideo(_ asset: AVURLAsset) async throws -> VideoInfo {
     guard let track = try await asset.loadTracks(withMediaType: .video).first else {
         throw ToolError("no video track in \(asset.url.lastPathComponent)")
     }
-    let (natural, transform, fps) = try await track.load(.naturalSize, .preferredTransform, .nominalFrameRate)
+    let (natural, transform, fps, timeScale) = try await track.load(
+        .naturalSize, .preferredTransform, .nominalFrameRate, .naturalTimeScale)
     let o = try orientation(for: transform)
     let size = (o == .left || o == .right) ? CGSize(width: natural.height, height: natural.width) : natural
     let duration = try await asset.load(.duration).seconds
     return VideoInfo(
         track: track, naturalSize: natural, size: size, orientation: o, transform: transform,
-        duration: duration, fps: Double(fps))
+        duration: duration, fps: Double(fps), timeScale: timeScale)
 }
 
 public func validateWipes(_ wipes: [CGRect], size: CGSize) throws {

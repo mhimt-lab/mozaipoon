@@ -69,6 +69,7 @@ struct ContentView: View {
                     .navigationTitle(model.current?.name ?? "モザイぷーん")
                     .navigationSubtitle(model.current?.subtitle ?? "")
                     .modifier(DocumentProxy(url: model.current?.url))
+                    .background(WindowReader { model.mainWindow = $0 })
                     .toolbar { toolbar }
                     .inspector(isPresented: $model.showInspector) {
                         if let v = model.current {
@@ -189,6 +190,27 @@ struct ContentView: View {
 }
 
 /// Title-bar proxy icon for the shown video.
+/// Hands over the window the view is in (for the player keys, which only apply there).
+private struct WindowReader: NSViewRepresentable {
+    let found: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let v = WindowReporter()
+        v.found = found
+        return v
+    }
+
+    func updateNSView(_ v: NSView, context: Context) {}
+
+    private final class WindowReporter: NSView {
+        var found: ((NSWindow?) -> Void)?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            found?(window)
+        }
+    }
+}
+
 private struct DocumentProxy: ViewModifier {
     let url: URL?
     func body(content: Content) -> some View {

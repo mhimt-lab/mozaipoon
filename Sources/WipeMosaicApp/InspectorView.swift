@@ -69,8 +69,9 @@ struct InspectorView: View {
         .onChange(of: video.focusedPerson) { _, id in
             if let id { model.reveal(id) }
         }
-        // Space toggles the selected person's mosaic (keyboard-only workflow).
-        .onKeyPress(.space) {
+        // Return toggles the selected person's mosaic (keyboard-only workflow; Space plays the
+        // video, as in QuickTime Player).
+        .onKeyPress(.return) {
             guard let id = video.focusedPerson else { return .ignored }
             model.toggle(id)
             return .handled

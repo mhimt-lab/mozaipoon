@@ -81,6 +81,33 @@ private struct AppCommands: Commands {
             Divider()
         }
         InspectorCommands()
+        // Keys are not listed here: a menu key equivalent without ⌘ would take Space from the
+        // text fields (and kana conversion). They are handled in AppModel.handleKey and named
+        // in the buttons' help.
+        CommandMenu("再生") {
+            Button(model.isPlaying ? "一時停止" : "再生") { model.togglePlay() }
+                .disabled(!model.hasVideo)
+            Button("1コマ戻る") { model.step(-1) }
+                .disabled(!model.hasVideo)
+            Button("1コマ進む") { model.step(1) }
+                .disabled(!model.hasVideo)
+            Divider()
+            Picker("速さ", selection: Binding(get: { model.playbackRate }, set: { model.playbackRate = $0 })) {
+                ForEach(AppModel.playbackRates, id: \.self) { r in
+                    Text(r == 1 ? "ふつう" : rateLabel(r)).tag(r)
+                }
+            }
+            .disabled(!model.hasVideo)
+            Divider()
+            Button("前の確かめてほしい場面") {
+                if let d = model.dip(after: false) ?? model.current?.summary?.dips.last { model.review(d) }
+            }
+            .disabled(model.current?.summary?.dips.isEmpty != false)
+            Button("次の確かめてほしい場面") {
+                if let d = model.dip(after: true) ?? model.current?.summary?.dips.first { model.review(d) }
+            }
+            .disabled(model.current?.summary?.dips.isEmpty != false)
+        }
         CommandMenu("人物") {
             Button("全員にモザイクをかける") { model.selectAll() }
                 .keyboardShortcut("a", modifiers: [.command, .shift])

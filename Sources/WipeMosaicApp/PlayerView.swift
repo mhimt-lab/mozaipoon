@@ -232,7 +232,7 @@ private struct TransportBar: View {
                 } label: {
                     Label("1コマ戻る", systemImage: "backward.frame.fill").labelStyle(.iconOnly)
                 }
-                .help("1コマ戻る")
+                .help("1コマ戻る（←。⇧← で 1 秒戻る）")
                 Button {
                     model.togglePlay()
                 } label: {
@@ -240,23 +240,40 @@ private struct TransportBar: View {
                         .labelStyle(.iconOnly)
                         .frame(width: 18)
                 }
-                .help(model.isPlaying ? "一時停止" : "再生")
+                .help(model.isPlaying ? "一時停止（スペース）" : "再生（スペース。L でもう一度押すと速くなる）")
                 Button {
                     model.step(1)
                 } label: {
                     Label("1コマ進む", systemImage: "forward.frame.fill").labelStyle(.iconOnly)
                 }
-                .help("1コマ進む")
+                .help("1コマ進む（→。⇧→ で 1 秒進む）")
                 Timeline(model: model, video: video, duration: duration)
-                Text("\(formatTime(model.currentTime)) / \(formatDuration(duration))")
+                Text("\(formatTime(model.playheadTime)) / \(formatDuration(duration))")
                     .font(.callout)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                if model.playbackRate != 1 {
+                    // Always in sight: at a faster speed, a few frames left unhidden are easy to miss.
+                    Text(rateLabel(model.playbackRate))
+                        .font(.callout.weight(.semibold))
+                        .monospacedDigit()
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(.quaternary, in: .capsule)
+                        .help("再生の速さ（再生 ▸ 速さ で変えられます）")
+                }
             }
             .buttonStyle(.borderless)
             .font(.title3)
             if let id = video.focusedPerson, video.scenes[id] != nil {
-                Text("線は「人物 \(id)」が映っている場面です。")
+                Text(video.selected.contains(id)
+                     ? "青い太線は「人物 \(id)」が映っている場面です（隠す人）。"
+                     : "太線は「人物 \(id)」が映っている場面です（まだ隠していない人）。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            if let dips = video.summary?.dips, !dips.isEmpty {
+                Text("▼は書き出した動画で確かめてほしい場面です（押すとその場面へ）。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -277,33 +294,84 @@ private struct Timeline: View {
             let w = geo.size.width
             let x = { (t: Double) in CGFloat(min(max(t / duration, 0), 1)) * w }
             ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary).frame(height: 6)
+                // Thin track, thick scene lines: in the same width and a near gray, the lines of a
+                // person not hidden read as part of the track.
+                Capsule().fill(.quaternary).frame(height: 4).offset(y: trackY)
                 if let id = video.focusedPerson, let scenes = video.scenes[id] {
                     let on = video.selected.contains(id)
                     ForEach(Array(scenes.enumerated()), id: \.offset) { _, r in
                         Capsule()
-                            .fill(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
-                            .frame(width: max(3, x(r.upperBound) - x(r.lowerBound)), height: 6)
-                            .offset(x: x(r.lowerBound))
+                            .fill(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.primary.opacity(0.7)))
+                            .frame(width: max(4, x(r.upperBound) - x(r.lowerBound)), height: 8)
+                            .offset(x: x(r.lowerBound), y: trackY)
                     }
                 }
                 Circle()
                     .fill(.white)
                     .shadow(color: .black.opacity(0.35), radius: 1.5)
                     .frame(width: 14, height: 14)
-                    .offset(x: x(model.currentTime) - 7)
+                    .offset(x: x(model.playheadTime) - 7, y: trackY)
             }
             .frame(height: geo.size.height)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { g in
                 model.seek(to: Double(min(max(g.location.x / max(w, 1), 0), 1)) * duration)
             })
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let p): model.timelineHover = Double(min(max(p.x / max(w, 1), 0), 1)) * duration
+                case .ended: model.timelineHover = nil
+                }
+            }
+            .onDisappear { model.timelineHover = nil }
+            // Places to check in the exported file (fewer faces hidden than just before and
+            // after), above the track: a triangle, not a color only.
+            .overlay(alignment: .topLeading) {
+                if let dips = video.summary?.dips {
+                    ForEach(dips) { d in
+                        Button {
+                            model.review(d)
+                        } label: {
+                            Image(systemName: "arrowtriangle.down.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.orange)
+                                .frame(width: 16, height: 12)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("確かめてほしい場面（\(formatTime(d.start))）：前後より隠す顔が減っています。押すと書き出した動画のこの場面へ移動します")
+                        .accessibilityLabel("確かめてほしい場面 \(formatTime(d.start))")
+                        .position(x: x(d.start), y: 5)
+                    }
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if let h = model.timelineHover {
+                    Text(formatTime(h))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.regularMaterial, in: .capsule)
+                        .fixedSize()
+                        .position(x: min(max(x(h), 28), max(w - 28, 28)), y: -10)
+                        .allowsHitTesting(false)
+                }
+            }
         }
-        .frame(height: 18)
+        .frame(height: 26)
         .accessibilityRepresentation {
-            Slider(value: Binding(get: { model.currentTime }, set: { model.seek(to: $0) }), in: 0...duration) {
+            Slider(value: Binding(get: { model.playheadTime }, set: { model.seek(to: $0) }), in: 0...duration) {
                 Text("再生位置")
             }
         }
     }
+
+    /// The track sits below the row of dip markers.
+    private var trackY: CGFloat { 4 }
+}
+
+/// "0.5倍", "2倍".
+func rateLabel(_ r: Float) -> String {
+    r == r.rounded() ? "\(Int(r))倍" : "\(r)倍"
 }
