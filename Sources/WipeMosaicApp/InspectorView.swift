@@ -463,7 +463,7 @@ struct ExportSection: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .help("\(s.output.path)\n\(s.format.description)・\(s.mosaicFrames)/\(s.frames)フレームで隠す・\(formatSeconds(s.elapsed))")
+                        .help("\(s.output.path)\n\(s.format.description)・\(s.mosaicFrames)/\(s.frames)コマで隠す・\(formatSeconds(s.elapsed))")
                 }
             } icon: {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)

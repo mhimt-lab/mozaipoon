@@ -502,8 +502,8 @@ private struct TransportBar: View {
                     .opacity(model.pendingSeek == nil ? 1 : 0.5)
                     .fixedSize()
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("コマ \(n.index)、全 \(n.count) コマ")
-                    .help("いま表示しているコマの番号（全 \(n.count) コマ）")
+                    .accessibilityLabel("コマ \(n.index)、全\(n.count)コマ")
+                    .help("いま表示しているコマの番号（全\(n.count)コマ）")
             }
             if model.playbackRate != 1 {
                 // Always in sight: at a faster speed, a few frames left unhidden are easy to miss.

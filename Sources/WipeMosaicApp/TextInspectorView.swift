@@ -104,7 +104,9 @@ struct TextInspectorView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .listRowSeparator(.hidden)
             ForEach(TextKind.allCases) { kind in
-                let count = text.entries.filter { $0.kinds.contains(kind) }.count
+                // A QR code is no line: codes are counted by the places they were found at.
+                let count = kind == .qr ? text.codePlaces : text.entries.filter { $0.kinds.contains(kind) }.count
+                let unit = kind == .qr ? "箇所" : "行"
                 Toggle(isOn: Binding(
                     get: { model.textKinds.contains(kind) },
                     set: { on in if on { model.textKinds.insert(kind) } else { model.textKinds.remove(kind) } }
@@ -113,10 +115,10 @@ struct TextInspectorView: View {
                         HStack(alignment: .firstTextBaseline) {
                             Text(kind.label)
                             Spacer(minLength: 4)
-                            Text("\(count)行")
+                            Text("\(count)\(unit)")
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
-                                .accessibilityLabel("この動画で\(count)行")
+                                .accessibilityLabel("この動画で\(count)\(unit)")
                         }
                         Text(kind.note)
                             .font(.callout)
@@ -216,7 +218,18 @@ struct TextInspectorView: View {
         }
         // Lines not hidden as a whole: also the partly hidden ones, whose rest may be a name the
         // rules missed (090-0000-1111 犬飼 hides only the number).
-        let isWhole: (TextEntry) -> Bool = { video.textAll || video.textLines.contains($0.id) }
+        // A QR code is hidden whole, also when only its kind hides it.
+        let codeID = text.codeEntryID
+        let isWhole: (TextEntry) -> Bool = {
+            video.textAll || video.textLines.contains($0.id) || ($0.id == codeID && hidden.contains($0.id))
+        }
+        // Lines in 行, the QR codes (one entry) in 箇所.
+        func count(_ entries: [TextEntry]) -> String {
+            let lines = entries.filter { $0.id != codeID }.count
+            guard entries.contains(where: { $0.id == codeID }) else { return "\(lines)行" }
+            let codes = "QRコード \(text.codePlaces)箇所"
+            return lines > 0 ? "\(lines)行・\(codes)" : codes
+        }
         let shown: (TextEntry) -> Bool = { !model.textUnhiddenOnly || !isWhole($0) }
         let main = text.entries.filter { isMain($0) && shown($0) }
         let flashes = text.entries.filter { !isMain($0) && shown($0) }
@@ -235,7 +248,7 @@ struct TextInspectorView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .listRowSeparator(.hidden)
             if !text.entries.isEmpty {
-                Toggle("行全体は隠していない行だけを表示（\(text.entries.filter { !isWhole($0) }.count)行）", isOn: $model.textUnhiddenOnly)
+                Toggle("行全体は隠していない行だけを表示（\(count(text.entries.filter { !isWhole($0) }))）", isOn: $model.textUnhiddenOnly)
                 .toggleStyle(.checkbox)  // like every other choice in this list
                 .help("何も隠していない行と、一部だけ隠した行を並べます。一部だけの行は、残った文字に名前などがないか確かめてください")
                 .listRowSeparator(.hidden)
@@ -253,7 +266,7 @@ struct TextInspectorView: View {
                 TextLineRow(model: model, video: video, text: text, entry: e)
             }
             if !flashes.isEmpty {
-                DisclosureGroup("一瞬だけ読み取れた文字（\(flashes.count)件）", isExpanded: $model.showTextFlashes) {
+                DisclosureGroup("一瞬だけ読み取れた文字（\(count(flashes))）", isExpanded: $model.showTextFlashes) {
                     ForEach(flashes) { e in
                         TextLineRow(model: model, video: video, text: text, entry: e)
                     }
@@ -262,7 +275,7 @@ struct TextInspectorView: View {
                 .listRowSeparator(.hidden)
             }
         } header: {
-            SectionTitle("見つかった文字（\(text.entries.count)行）")
+            SectionTitle("見つかった文字（\(count(text.entries))）")
         }
     }
 
@@ -336,15 +349,19 @@ private struct TextLineRow: View {
     let text: ScreenText
     let entry: TextEntry
 
+    /// The entry of the QR codes: hidden whole or not at all, and not a line.
+    private var isCode: Bool { entry.id == text.codeEntryID }
+
     var body: some View {
         let whole = video.textAll || video.textLines.contains(entry.id)
         let partly = !whole && (video.textMask?.hidden.contains(entry.id) ?? false)
+        let what = isCode ? "QRコード" : "行全体"
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Toggle(entry.text, isOn: Binding(get: { whole }, set: { model.setTextLine(entry.id, $0) }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()
                 .disabled(video.textAll)
-                .help(whole ? "押すと、行全体を隠すのをやめます" : "押すと、行全体を隠します")
+                .help(whole ? "押すと、\(what)を隠すのをやめます" : "押すと、\(what)を隠します")
             Button {
                 model.seek(to: text.times[entry.firstFrame])
             } label: {
@@ -370,20 +387,21 @@ private struct TextLineRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("押すと、この行が映る場面を表示します")
-            .accessibilityHint("この行が映る場面を表示します")
+            .help(isCode ? "押すと、QRコードが映る場面を表示します" : "押すと、この行が映る場面を表示します")
+            .accessibilityHint(isCode ? "QRコードが映る場面を表示します" : "この行が映る場面を表示します")
             Spacer(minLength: 0)
             // Room kept when not hidden too, so the times line up in one column.
             Image(systemName: "eye.slash")
                 .foregroundStyle(.secondary)  // a state mark, not a button
                 .opacity(whole || partly ? 1 : 0)
-                .help(whole ? "行全体を隠しています" : partly ? "一部を隠しています" : "")
+                .help(isCode ? (whole || partly ? "QRコードを隠しています" : "") : whole ? "行全体を隠しています" : partly ? "一部を隠しています" : "")
                 .accessibilityHidden(!(whole || partly))
         }
         .padding(.vertical, 2)
     }
 
     private func caption(whole: Bool, partly: Bool) -> String {
+        if isCode { return "\(whole || partly ? "隠す" : "隠していません")（\(text.codePlaces)箇所）" }
         if whole { return "行全体を隠す" }
         if partly {
             var why = entry.kinds.filter { model.textKinds.contains($0) }.sorted { $0.rawValue < $1.rawValue }.map(\.shortLabel)

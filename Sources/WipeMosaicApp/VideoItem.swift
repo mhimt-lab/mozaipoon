@@ -178,11 +178,15 @@ final class VideoItem: Identifiable {
         return out.isEmpty ? nil : "\(out.joined(separator: "と"))は探していないので、隠れません"
     }
 
-    /// "3人中 1人・文字 12行を隠す" for the sidebar and the export sheet (mosaic, blur or sticker).
+    /// "3人中 1人・文字 12行・QRコード 2箇所を隠す" for the sidebar and the export sheet (mosaic, blur or sticker).
     var choiceSummary: String {
         var parts: [String] = []
         if let a = analysis, !a.people.isEmpty, !selected.isEmpty { parts.append("\(a.people.count)人中 \(selected.count)人") }
-        if hiddenTextCount > 0 { parts.append("文字 \(hiddenTextCount)行") }
+        // Lines in 行; the QR codes are one entry, counted by place.
+        let codeID = text?.codeEntryID
+        let hiddenLines = (textMask?.hidden ?? []).filter { $0 != codeID }.count
+        if hiddenLines > 0 { parts.append("文字 \(hiddenLines)行") }
+        if let codeID, let text, textMask?.hidden.contains(codeID) == true { parts.append("QRコード \(text.codePlaces)箇所") }
         return parts.joined(separator: "・") + "を隠す"
     }
 

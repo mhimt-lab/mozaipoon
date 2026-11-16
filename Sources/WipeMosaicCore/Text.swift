@@ -304,6 +304,47 @@ public struct ScreenText: Sendable {
         return min(lo, t.first)...max(hi, t.last)
     }
 
+    /// Track id → the track that continues it: the nearest one that starts within `maxGap`
+    /// (6 s with `all` and for a QR code, else 3 s) at the same place (centres less than 1.5
+    /// line heights apart, 3 sides of a code), of a similar height, with similar text (any text
+    /// with `all`). A code only continues a code. Nil when cancelled.
+    func continuations(of tracks: [TextTrack], all: Bool, cancelled: () -> Bool = { false }) -> [Int: TextTrack]? {
+        let maxGap = all ? 6.0 : 3.0, maxCodeGap = 6.0
+        let byStart = tracks.sorted { $0.first < $1.first }
+        let starts = byStart.map(\.first)
+        var next: [Int: TextTrack] = [:]
+        for a in byStart {
+            if cancelled() { return nil }
+            let ra = a.samples[a.samples.count - 1].rect
+            let ta = times[a.last]
+            var k = starts.partitionIndex { $0 > a.last }
+            while k < byStart.count, times[byStart[k].first] - ta <= (a.isCode ? maxCodeGap : maxGap) {
+                let b = byStart[k]
+                k += 1
+                let rb = b.samples[0].rect
+                guard a.isCode == b.isCode,
+                      hypot(ra.midX - rb.midX, ra.midY - rb.midY) < (a.isCode ? 3 : 1.5) * max(ra.height, rb.height),
+                      rb.height > 0.6 * ra.height, rb.height < 1.6 * ra.height,
+                      all || similarity(normalizedForMatch(a.text), normalizedForMatch(b.text)) >= 0.6
+                else { continue }
+                next[a.id] = b
+                break  // the nearest continuation is enough
+            }
+        }
+        return next
+    }
+
+    /// The entry that lists the QR codes (all codes are one entry); nil without codes.
+    public var codeEntryID: Int? { entries.first { $0.kinds.contains(.qr) }?.id }
+
+    /// How many places QR codes were found at: a code and the codes that continue it (found
+    /// again after it could not be read) count once.
+    public var codePlaces: Int {
+        let codes = tracks.filter(\.isCode)
+        let next = continuations(of: codes, all: false) ?? [:]
+        return codes.count - next.count
+    }
+
     /// Boxes to mosaic for the options.
     public func mask(_ o: TextMaskOptions) -> TextMask { makeMask(o, cancellable: false)! }
 
@@ -365,28 +406,8 @@ public struct ScreenText: Sendable {
         // longer (glare, focus, fingers); any text at the place counts there.
         // A QR code goes unread while the camera is out of focus or moving: up to 6 s, and up to
         // 3 sides of the code away (the camera moves meanwhile).
-        let maxGap = o.all ? 6.0 : 3.0, maxCodeGap = 6.0
+        guard let next = continuations(of: tracks, all: o.all, cancelled: cancelled) else { return nil }
         let byStart = tracks.sorted { $0.first < $1.first }
-        let starts = byStart.map(\.first)
-        var next: [Int: TextTrack] = [:]  // track id → its continuation
-        for a in byStart {
-            if cancelled() { return nil }
-            let ra = a.samples[a.samples.count - 1].rect
-            let ta = times[a.last]
-            var k = starts.partitionIndex { $0 > a.last }
-            while k < byStart.count, times[byStart[k].first] - ta <= (a.isCode ? maxCodeGap : maxGap) {
-                let b = byStart[k]
-                k += 1
-                let rb = b.samples[0].rect
-                guard a.isCode == b.isCode,
-                      hypot(ra.midX - rb.midX, ra.midY - rb.midY) < (a.isCode ? 3 : 1.5) * max(ra.height, rb.height),
-                      rb.height > 0.6 * ra.height, rb.height < 1.6 * ra.height,
-                      o.all || similarity(normalizedForMatch(a.text), normalizedForMatch(b.text)) >= 0.6
-                else { continue }
-                next[a.id] = b
-                break  // the nearest continuation is enough
-            }
-        }
         // Forward then backward: every track of a chain ends with the union of its parts.
         for a in byStart {
             guard let b = next[a.id], let ra = relsOf[a.id] else { continue }
