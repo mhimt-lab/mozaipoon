@@ -117,9 +117,12 @@ public func frameIndex(_ times: [Double], at time: Double) -> Int {
 /// Decode every video frame once and hand the upright image to `body`.
 /// Throws CancellationError when the surrounding task is cancelled.
 func forEachFrame(
-    asset: AVURLAsset, info: VideoInfo, _ body: (_ index: Int, _ time: Double, _ image: CIImage) throws -> Void
+    asset: AVURLAsset, info: VideoInfo, from start: Double? = nil,
+    _ body: (_ index: Int, _ time: Double, _ image: CIImage) throws -> Void
 ) throws {
     let reader = try AVAssetReader(asset: asset)
+    // From `start` on (the index then counts from the first frame read).
+    if let start { reader.timeRange = CMTimeRange(start: CMTime(seconds: max(0, start), preferredTimescale: info.timeScale), end: .positiveInfinity) }
     let output = AVAssetReaderTrackOutput(
         track: info.track,
         outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
