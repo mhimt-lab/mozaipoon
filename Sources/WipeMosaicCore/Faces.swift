@@ -22,11 +22,13 @@ public struct FrameFaces: Sendable {
     public let exactAnchors: [CGPoint]
     /// QR codes to mosaic along their four corners (margin included; see `TextMask.codes`).
     public let codes: [[CGPoint]]
+    /// Slanted lines of on-screen text to mosaic along their corners (see `TextMask.slanted`).
+    public let slanted: [[CGPoint]]
     /// Faces covered by a person's sticker instead of the mosaic (not in `mosaic`).
     public let stickers: [StickerBox]
     public init(
         time: Double, mosaic: [CGRect], kept: [CGRect], exact: [CGRect] = [], exactAnchors: [CGPoint] = [],
-        codes: [[CGPoint]] = [], stickers: [StickerBox] = []
+        codes: [[CGPoint]] = [], slanted: [[CGPoint]] = [], stickers: [StickerBox] = []
     ) {
         self.time = time
         self.mosaic = mosaic
@@ -34,15 +36,16 @@ public struct FrameFaces: Sendable {
         self.exact = exact
         self.exactAnchors = exactAnchors
         self.codes = codes
+        self.slanted = slanted
         self.stickers = stickers
     }
 
     /// Faces hidden in this frame, by mosaic or sticker.
     public var faceCount: Int { mosaic.count + stickers.count }
     /// Something is hidden in this frame.
-    public var hidesAnything: Bool { !mosaic.isEmpty || !exact.isEmpty || !codes.isEmpty || !stickers.isEmpty }
+    public var hidesAnything: Bool { !mosaic.isEmpty || hidesText || !stickers.isEmpty }
     /// On-screen text or a QR code is hidden in this frame.
-    public var hidesText: Bool { !exact.isEmpty || !codes.isEmpty }
+    public var hidesText: Bool { !exact.isEmpty || !codes.isEmpty || !slanted.isEmpty }
 }
 
 private func area(_ r: CGRect) -> CGFloat { r.isNull ? 0 : r.width * r.height }

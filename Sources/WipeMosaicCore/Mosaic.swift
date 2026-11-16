@@ -221,10 +221,10 @@ struct FaceIndex: Sendable {
 
     /// Boxes for the frame shown at `t` that are drawn without the face margin, and the
     /// corners their mosaic blocks line up with.
-    func exactRects(at t: Double) -> (rects: [CGRect], anchors: [CGPoint], codes: [[CGPoint]]) {
-        guard !frames.isEmpty else { return ([], [], []) }
+    func exactRects(at t: Double) -> (rects: [CGRect], anchors: [CGPoint], codes: [[CGPoint]], slanted: [[CGPoint]]) {
+        guard !frames.isEmpty else { return ([], [], [], []) }
         let f = frames[max(0, firstIndex(atOrAfter: t + 1e-3) - 1)]
-        return (f.exact, f.exactAnchors, f.codes)
+        return (f.exact, f.exactAnchors, f.codes, f.slanted)
     }
 
     /// Faces to mosaic at `t` (± hold, with the margin).

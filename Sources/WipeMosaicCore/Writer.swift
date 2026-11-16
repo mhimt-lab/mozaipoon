@@ -192,7 +192,7 @@ public func writeMosaic(
                         let rects = index.faceRects(at: pts.seconds, hold: hold, pad: pad)
                         let text = index.exactRects(at: pts.seconds)
                         let stickers = index.stickerBoxes(at: pts.seconds)
-                        if rects.isEmpty && text.rects.isEmpty && text.codes.isEmpty && stickers.isEmpty {
+                        if rects.isEmpty && text.rects.isEmpty && text.codes.isEmpty && text.slanted.isEmpty && stickers.isEmpty {
                             return adaptor.append(src, withPresentationTime: pts)
                         }
                         guard let pool = adaptor.pixelBufferPool else { return false }
@@ -203,7 +203,8 @@ public func writeMosaic(
                         CVBufferPropagateAttachments(src, dst)
                         let up = uprightImage(src, info)
                         let mosaicked = applyCover(
-                            up, rects: rects, text: text.rects, textAnchors: text.anchors, codes: text.codes, stickers: stickers, render: render,
+                            up, rects: rects, text: text.rects, textAnchors: text.anchors, codes: text.codes, slanted: text.slanted,
+                            stickers: stickers, render: render,
                             block: block)
                         let raw = info.orientation == .up ? mosaicked : mosaicked.oriented(inverse(info.orientation))
                         let space =

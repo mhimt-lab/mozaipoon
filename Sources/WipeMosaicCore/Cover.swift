@@ -233,10 +233,11 @@ public final class Sticker: @unchecked Sendable {
 }
 
 /// Everything that hides one frame: boxes hidden with `render.style`, then stickers on top.
-/// `rects` are faces (margin included), `text` the on-screen text boxes (see `applyMosaic`).
+/// `rects` are faces (margin included), `text` the on-screen text boxes (see `applyMosaic`),
+/// `codes` QR codes and `slanted` slanted lines of text, cut along their corners.
 public func applyCover(
     _ img: CIImage, rects: [CGRect], text: [CGRect] = [], textAnchors: [CGPoint] = [], codes: [[CGPoint]] = [],
-    stickers: [StickerBox], render: RenderSettings, block: CGFloat
+    slanted: [[CGPoint]] = [], stickers: [StickerBox], render: RenderSettings, block: CGFloat
 ) -> CIImage {
     // The mosaic (or blur) with the usual margin goes under a sticker whose face was not
     // detected in this frame, under one that lets part of the face show (a hole, a
@@ -248,8 +249,10 @@ public func applyCover(
     }.map { padded($0.rect, render.pad) }
     let all = rects + under
     var out = render.style == .blur
-        ? applyBlur(img, rects: all, moving: text, anchors: textAnchors, codes: codes, block: block)
-        : codeBlocks(img, over: applyMosaic(img, rects: all, moving: text, anchors: textAnchors, block: block), codes: codes, block: block)
+        ? applyBlur(img, rects: all, moving: text, anchors: textAnchors, codes: codes, slanted: slanted, block: block)
+        : codeBlocks(
+            img, over: codeBlocks(img, over: applyMosaic(img, rects: all, moving: text, anchors: textAnchors, block: block), codes: slanted, block: block, blocks: textBlocks),
+            codes: codes, block: block)
     for s in stickers {
         guard let sticker = render.stickers[s.person] else { continue }
         out = sticker.drawn(over: s.rect, scale: render.stickerScale, angle: s.angle).composited(over: out).cropped(to: img.extent)
@@ -263,18 +266,23 @@ public func applyCover(
 /// Inside each box the blur is complete; it fades out over a short distance outside, so the
 /// edge does not look like a pasted grey square.
 public func applyBlur(
-    _ img: CIImage, rects: [CGRect], moving: [CGRect] = [], anchors: [CGPoint] = [], codes: [[CGPoint]] = [], block: CGFloat
+    _ img: CIImage, rects: [CGRect], moving: [CGRect] = [], anchors: [CGPoint] = [], codes: [[CGPoint]] = [],
+    slanted: [[CGPoint]] = [], block: CGFloat
 ) -> CIImage {
     let ext = img.extent
     let boxes = (rects + moving).map { $0.intersection(ext) }.filter { !$0.isNull && !$0.isEmpty }
-    let quads = codes.filter { !$0.isEmpty && boundingBox($0).intersects(ext) }
+    let lines = slanted.filter { !$0.isEmpty && boundingBox($0).intersects(ext) }
+    let codeQuads = codes.filter { !$0.isEmpty && boundingBox($0).intersects(ext) }
+    let quads = codeQuads + lines
     guard !boxes.isEmpty || !quads.isEmpty else { return img }
     // Blocks as in `applyMosaic` (text blocks move with the text): over the whole image when
     // there are faces, else over the picture as it is (outside the boxes it only shows in the
     // short fade).
     let blocks = codeBlocks(
-        img, over: movingBlocks(img, over: rects.isEmpty ? img : pixellated(img, block: block), moving: moving, anchors: anchors, block: block),
-        codes: quads, block: block)
+        img, over: codeBlocks(
+            img, over: movingBlocks(img, over: rects.isEmpty ? img : pixellated(img, block: block), moving: moving, anchors: anchors, block: block),
+            codes: lines, block: block, blocks: textBlocks),
+        codes: codeQuads, block: block)
     let blurred = blocks.clampedToExtent()
         .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: block])
         .cropped(to: ext)
@@ -306,6 +314,14 @@ public func applyBlur(
 /// side, also with 4 px blocks, in none (21- and 39-module codes of 300–1000 px, 2026-11-16).
 let maxCodeBlocks: CGFloat = 6
 
+/// How many blocks a quad gets each way: for a QR code 3 to `maxCodeBlocks`; for a slanted
+/// line of text `textBlocks`, blocks of the block size (at least one), as on an upright line.
+struct QuadBlocks {
+    let min: CGFloat, max: CGFloat
+}
+let codeBlockCount = QuadBlocks(min: 3, max: maxCodeBlocks)
+let textBlocks = QuadBlocks(min: 1, max: .infinity)
+
 /// The quad can be straightened and drawn: 4 finite corners making a convex quad of some size.
 /// Anything else (corners in the wrong order, a code seen edge on) is hidden by its box.
 func isDrawableQuad(_ q: [CGPoint]) -> Bool {
@@ -323,22 +339,22 @@ func isDrawableQuad(_ q: [CGPoint]) -> Bool {
 /// covered by a slanted quad with blocks that follow the code, instead of the upright box
 /// around it, which also hid the text beside it; the blocks move with the code, so they do not
 /// change while the camera moves. A quad that cannot be drawn so is hidden by its box.
-func codeBlocks(_ img: CIImage, over base: CIImage, codes: [[CGPoint]], block: CGFloat) -> CIImage {
+func codeBlocks(_ img: CIImage, over base: CIImage, codes: [[CGPoint]], block: CGFloat, blocks: QuadBlocks = codeBlockCount) -> CIImage {
     let ext = img.extent
     var out = base
     for q in codes where !q.isEmpty && boundingBox(q).intersects(ext) {
-        if let b = quadBlocks(img, q, block: block) {
+        if let b = quadBlocks(img, q, block: block, blocks: blocks) {
             out = b.composited(over: out)
         } else {
             let box = boundingBox(q).intersection(ext)
-            let b = max(block, max(box.width, box.height) / maxCodeBlocks)
+            let b = max(block, max(box.width, box.height) / blocks.max)
             out = pixellated(img, block: b, origin: box.origin).cropped(to: box).composited(over: out)
         }
     }
     return out.cropped(to: ext)
 }
 
-private func quadBlocks(_ img: CIImage, _ q: [CGPoint], block: CGFloat) -> CIImage? {
+private func quadBlocks(_ img: CIImage, _ q: [CGPoint], block: CGFloat, blocks: QuadBlocks) -> CIImage? {
     guard isDrawableQuad(q) else { return nil }
     func v(_ p: CGPoint) -> CIVector { CIVector(x: p.x, y: p.y) }
     let flat = img.clampedToExtent().applyingFilter("CIPerspectiveCorrection", parameters: [
@@ -346,8 +362,8 @@ private func quadBlocks(_ img: CIImage, _ q: [CGPoint], block: CGFloat) -> CIIma
     ])
     let fe = flat.extent
     guard fe.width >= 1, fe.height >= 1, fe.width.isFinite, fe.height.isFinite else { return nil }
-    let nx = min(maxCodeBlocks, max(3, (fe.width / block).rounded()))
-    let ny = min(maxCodeBlocks, max(3, (fe.height / block).rounded()))
+    let nx = min(blocks.max, max(blocks.min, (fe.width / block).rounded()))
+    let ny = min(blocks.max, max(blocks.min, (fe.height / block).rounded()))
     // Blocks of `block` px on the straightened code: its size changes, the block count does not.
     let grid = flat
         .transformed(by: CGAffineTransform(translationX: -fe.minX, y: -fe.minY))

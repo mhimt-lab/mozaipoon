@@ -355,7 +355,7 @@ final class AppModel {
         guard let v = current, let text = v.text, let mask = v.textMask, showFaceBoxes, !isPlaying, viewMode != .result
         else { return ([], []) }
         let i = text.frameIndex(at: currentTime)
-        return (mask.frames[i], mask.codes[i])
+        return (mask.frames[i], mask.codes[i] + mask.slanted[i])
     }
 
     /// Presentation times of the current video's frames, as read to find faces or text (the

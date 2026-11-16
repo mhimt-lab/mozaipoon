@@ -109,7 +109,7 @@ func runMosaic(_ o: RunOptions) async throws {
         for f in frames {
             let boxes = f.mosaic.map { String(format: "%.0f:%.0f:%.0f:%.0f", $0.minX, h - $0.maxY, $0.width, $0.height) }
             csv += String(format: "%.3f,%d,%d,", f.time, f.mosaic.count, f.kept.count) + boxes.joined(separator: " ")
-                + ",\(f.exact.count + f.codes.count),"
+                + ",\(f.exact.count + f.codes.count + f.slanted.count),"
                 + f.stickers.map {
                     // Last field 1: face estimated in this frame, a mosaic is drawn under the sticker.
                     String(format: "%d:%.0f:%.0f:%.0f:%.0f:%d", $0.person, $0.rect.minX, h - $0.rect.maxY, $0.rect.width,
@@ -245,7 +245,7 @@ func listText(input: URL, options: TextMaskOptions, list: Bool) async throws {
     let hiddenCodes = mask.hidden.intersection(codeIDs).count
     let codes = hiddenCodes > 0 ? ", QR codes at \(counted(hiddenCodes, "place"))" : ""
     print("  hidden with these options: \(counted(mask.hidden.subtracting(codeIDs).count, "line"))\(codes), word hits: \(mask.wordHits.count)")
-    print("  frames with hidden text: \(zip(mask.frames, mask.codes).filter { !$0.isEmpty || !$1.isEmpty }.count)")
+    print("  frames with hidden text: \(mask.frames.indices.filter { !mask.frames[$0].isEmpty || !mask.codes[$0].isEmpty || !mask.slanted[$0].isEmpty }.count)")
     guard list else { return }
     for e in text.entries {
         let kinds = e.kinds.map(\.rawValue).sorted().joined(separator: ",")
