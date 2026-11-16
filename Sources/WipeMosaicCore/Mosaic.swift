@@ -156,9 +156,22 @@ func forEachFrame(
 /// 2026-11-14: 2 → 102s, 3 → 93s, 4–6 → 89–90s, 8 → 105s, 16 → 100s).
 func forEachFrameDetecting(
     asset: AVURLAsset, info: VideoInfo, tiles: Int, tileInterval: Double = 0, extraRegions: [CGRect],
-    angleInterval: Double? = nil, batch: Int = 4,
+    angleInterval: Double? = nil, batch: Int = 4, workers: Int = faceWorkerCount(), only: ((Int) -> Bool)? = nil,
     _ body: (_ index: Int, _ time: Double, _ image: CIImage, _ faces: [FaceBox]) throws -> Void
 ) throws {
+    // With `workers` > 1 the faces are detected by that many worker processes (see
+    // FaceWorkers.swift; the result is the same). `only`: the frames to detect and call `body`
+    // for (a worker's own).
+    if workers > 1, only == nil, let exe = Bundle.main.executableURL {
+        let pool = try FaceWorkerPool(
+            executable: exe, video: asset.url, count: workers, tiles: tiles, tileInterval: tileInterval, angleInterval: angleInterval,
+            extraRegions: extraRegions)
+        defer { pool.terminate() }
+        try forEachFrame(asset: asset, info: info) { i, t, img in
+            try body(i, t, img, try pool.faces(frame: i, time: t))
+        }
+        return
+    }
     let tileEvery = max(1, Int((tileInterval * max(info.fps, 1)).rounded()))
     // The tilt of the faces (for stickers) every `angleInterval` seconds; it is smoothed over
     // time anyway, and measuring it costs a landmark request per frame.
@@ -183,6 +196,7 @@ func forEachFrameDetecting(
         for (k, f) in items.enumerated() { try body(f.index, f.time, f.image, faces[k]) }
     }
     try forEachFrame(asset: asset, info: info) { i, t, img in
+        if let only, !only(i) { return }
         pending.append((i, t, img))
         if pending.count >= batch { try flush() }
     }

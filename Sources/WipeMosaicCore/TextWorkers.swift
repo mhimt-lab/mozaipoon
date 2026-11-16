@@ -26,6 +26,9 @@ public func textWorkerCount() -> Int {
     if let s = ProcessInfo.processInfo.environment["WIPE_MOSAIC_TEXT_WORKERS"], let n = Int(s) { return min(max(0, n), 16) }
     let memory = ProcessInfo.processInfo.physicalMemory
     let cores = ProcessInfo.processInfo.activeProcessorCount
+    // 8 read a 2 min 1080p30 camera video in 88 s, 4 in 111 s, 6 in 95 s, 10 in 87 s (M3 Max
+    // with 14 cores and 36 GB, 2026-11-17; the same result each time).
+    if memory >= 32 << 30, cores >= 12 { return 8 }
     if memory >= 16 << 30, cores >= 8 { return 4 }
     return memory >= 8 << 30 && cores >= 4 ? 2 : 0
 }
@@ -34,6 +37,16 @@ public func textWorkerCount() -> Int {
 /// exits; otherwise returns at once.
 public func runTextWorkerIfRequested() {
     let args = CommandLine.arguments
+    if args.count >= 3, args[1] == faceWorkerArgument {
+        signal(SIGPIPE, SIG_IGN)
+        do {
+            try faceWorkerMain(video: URL(fileURLWithPath: args[2]), arguments: Array(args[3...]))
+            exit(0)
+        } catch {
+            FileHandle.standardError.write(Data("\(error)\n".utf8))
+            exit(1)
+        }
+    }
     guard args.count == 3, args[1] == textWorkerArgument else { return }
     signal(SIGPIPE, SIG_IGN)  // a closed pipe should fail a write, not kill silently
     do {
@@ -100,7 +113,7 @@ private func textWorkerMain(video: URL) throws {
 }
 
 /// Runs async work from synchronous code (the worker starts before any run loop).
-private func waitFor<T>(_ work: @escaping () async throws -> T) throws -> T {
+func waitFor<T>(_ work: @escaping () async throws -> T) throws -> T {
     let box = ResultBox<T>(count: 1)
     let done = DispatchSemaphore(value: 0)
     Task.detached {
