@@ -107,10 +107,6 @@ final class AppModel {
             UserDefaults.standard.set(textKinds.map(\.rawValue).sorted(), forKey: Keys.textKinds)
             UserDefaults.standard.set(TextKind.allCases.map(\.rawValue), forKey: Keys.textKindsKnown)
             updateTextMasks()
-            // Plates turned on: the videos read without them are read again.
-            if textKinds.contains(.plate), !oldValue.contains(.plate) {
-                for v in videos where v.text?.platesRead == false { scanText(v) }
-            }
         }
     }
     /// Words (names, account names…) hidden wherever they appear on screen (all videos).
@@ -229,16 +225,15 @@ final class AppModel {
         static let accuracy = "accuracy", hold = "hold", pad = "pad", autoBlock = "autoBlock", block = "block"
         static let coverStyle = "coverStyle", stickerScale = "stickerScale"
         static let textKinds = "textKinds", textWords = "textWords"
-        /// The kinds the app knew when `textKinds` was saved: a kind added later starts as in
-        /// `defaultTextKinds`.
+        /// The kinds the app knew when `textKinds` was saved: a kind added later starts on.
         static let textKindsKnown = "textKindsKnown"
     }
 
     private static func storedKinds() -> Set<TextKind> {
-        guard let raw = UserDefaults.standard.stringArray(forKey: Keys.textKinds) else { return defaultTextKinds }
+        guard let raw = UserDefaults.standard.stringArray(forKey: Keys.textKinds) else { return Set(TextKind.allCases) }
         // Saved before the kinds were remembered: the five kinds before QR codes.
         let known = UserDefaults.standard.stringArray(forKey: Keys.textKindsKnown) ?? ["number", "email", "url", "address", "name"]
-        return Set(raw.compactMap(TextKind.init(rawValue:))).union(defaultTextKinds.filter { !known.contains($0.rawValue) })
+        return Set(raw.compactMap(TextKind.init(rawValue:))).union(TextKind.allCases.filter { !known.contains($0.rawValue) })
     }
 
     private static func stored(_ key: String, _ fallback: Double) -> Double {
@@ -871,7 +866,6 @@ final class AppModel {
         guard let v = next, let i = v.info else { return }
         let id = v.id
         let a = v.asset
-        let plates = textKinds.contains(.plate)
         v.textState = .running(0)
         textScanningID = id
         textTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -879,7 +873,7 @@ final class AppModel {
             let total = max(1, Int((i.fps * i.duration).rounded()))
             var last = Date.distantPast
             do {
-                let text = try analyzeText(asset: a, info: i, workers: textWorkerCount(), plates: plates) { n in
+                let text = try analyzeText(asset: a, info: i, workers: textWorkerCount()) { n in
                     let now = Date()
                     guard now.timeIntervalSince(last) > 0.1 else { return }
                     last = now
@@ -910,8 +904,6 @@ final class AppModel {
                 v.text = text
                 v.textState = .done
                 updateTextMask(v)
-                // Plates turned on while it was read without them.
-                if !text.platesRead, textKinds.contains(.plate) { scanText(v) }
             case .failure(let error) where error is CancellationError:
                 v.textState = .cancelled
             case .failure(let error):

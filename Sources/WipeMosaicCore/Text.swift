@@ -12,9 +12,6 @@ public enum TextKind: String, CaseIterable, Sendable, Identifiable {
     case address
     /// Japanese person names with a common family name (see Names.swift).
     case name
-    /// Japanese license plates of cars and motorcycles: found by the number line (あ 12-34,
-    /// ・・12), and hidden whole (the place name and class number above it, the kana before it).
-    case plate
     /// QR codes (a LINE friend code, a payment code…): found as codes, not as text.
     case qr
     public var id: String { rawValue }
@@ -32,8 +29,6 @@ struct TextSample: @unchecked Sendable {
     /// code or the line), relative to `rect` (0...1 across it). Nil for a line cut at the edge
     /// of the picture (its corners lie outside `rect`).
     var corners: [CGPoint]? = nil
-    /// A box of a plate followed by the tracker (`followPlates`), not a reading.
-    var tracked = false
 
     /// Height of the line itself: across its corners (the larger side, for a line seen in
     /// perspective), else its box. On a slanted line the box is far higher than the line, and
@@ -58,24 +53,11 @@ public struct TextTrack: Sendable {
     public fileprivate(set) var text = ""
     /// A QR code followed like a line (its samples read `codeText`), not text.
     fileprivate(set) var isCode = false
-    /// A plate followed by the tracker (`followPlates`) as far as it could go at an end (up to
-    /// `plateFollowReach` from the reading, or out of the picture): held on only
-    /// `plateHeldExtend` past its box at that end. Else, as other lines, `extend`.
-    fileprivate(set) var heldBriefly: (before: Bool, after: Bool) = (false, false)
 
-    /// Frames where the line was recognized (or pinned while the picture did not change), not
-    /// the boxes of a followed plate.
-    public var sampleFrames: [Int] { samples.filter { !$0.tracked }.map(\.frame) }
-    /// First and last frames with a box (a reading, or a followed plate's box).
+    /// Frames where the line was recognized (or pinned while the picture did not change).
+    public var sampleFrames: [Int] { samples.map(\.frame) }
     var first: Int { samples.first!.frame }
     var last: Int { samples.last!.frame }
-    /// First and last readings (a followed plate's boxes left out): a misread continuation of
-    /// a plate starts after its last reading, maybe before its last followed box.
-    var firstReading: TextSample { samples.first { !$0.tracked } ?? samples[0] }
-    var lastReading: TextSample { samples.last { !$0.tracked } ?? samples[samples.count - 1] }
-    /// How long the line is held on before its first box and after its last one, of `extend`.
-    func extendBefore(_ extend: Double) -> Double { heldBriefly.before ? min(extend, plateHeldExtend) : extend }
-    func extendAfter(_ extend: Double) -> Double { heldBriefly.after ? min(extend, plateHeldExtend) : extend }
 
     /// Line boxes at the recognized frames with the jitter of recognition taken out, and how
     /// far the recognized box may lie outside each (see `makeSteady`). Empty: the boxes as read.
@@ -108,9 +90,7 @@ public struct TextTrack: Sendable {
     /// short line (2 characters) it gives the upright box (0°), so a slant is only taken from
     /// lines at least 2.5 times as long as high. A track is slanted when most of its readings
     /// give a slant, of 2° to 35° (the median): below 2° the upright box is as good; beyond 35°
-    /// the line cannot be found again from its box (see `slantedBox`). A followed plate's
-    /// boxes carry the corners of a reading: they get its slant, but count neither for "most" nor
-    /// for the median.
+    /// the line cannot be found again from its box (see `slantedBox`).
     mutating func measureTilt(times: [Double], window: Double = 0.25) {
         tilts = []
         tiltSlacks = []
@@ -126,9 +106,8 @@ public struct TextTrack: Sendable {
             guard height > 0, hypot(end.x - start.x, end.y - start.y) >= 2.5 * height else { return nil }
             return atan2(end.y - start.y, end.x - start.x)
         }
-        let readings = samples.indices.filter { !samples[$0].tracked }
-        let known = readings.compactMap { measured[$0] }
-        guard !known.isEmpty, known.count * 2 >= readings.count else { return }
+        let known = measured.compactMap { $0 }
+        guard !known.isEmpty, known.count * 2 >= samples.count else { return }
         let median = known.sorted()[known.count / 2]
         guard abs(median) >= minTilt, abs(median) <= maxTilt else { return }
         let ts = samples.map { times[$0.frame] }
@@ -206,14 +185,6 @@ public struct TextTrack: Sendable {
 
     private func box(_ k: Int) -> CGRect { steady.isEmpty ? samples[k].rect : steady[k].rect }
     private func slack(_ k: Int) -> CGSize { steady.isEmpty ? .zero : steady[k].slack }
-
-    /// Adds the boxes of a plate followed by the tracker (Plates.swift) at frames it has no
-    /// reading at; `heldBriefly`: the tracker went as far as it could at that end.
-    mutating func addFollowed(_ more: [TextSample], heldBriefly: (before: Bool, after: Bool)) {
-        let have = Set(samples.map(\.frame))
-        samples = (samples + more.filter { !have.contains($0.frame) }).sorted { $0.frame < $1.frame }
-        self.heldBriefly = heldBriefly
-    }
 
     /// Recognition puts the box of the same line a few pixels off every time (±2 px in place
     /// and ±3 px in height were measured), and the mosaic drawn from it shook while the screen
@@ -310,14 +281,14 @@ public struct TextTrack: Sendable {
         func corner(_ r: CGRect) -> CGPoint { CGPoint(x: r.minX.rounded(), y: r.minY.rounded()) }
         let t = times[f]
         if f < first {
-            guard times[first] - t <= extendBefore(extend) + 1e-6 else { return nil }
+            guard times[first] - t <= extend + 1e-6 else { return nil }
             let r0 = box(0)
             guard samples.count > 1 else { return (r0, corner(r0)) }
             let moved = lerp(r0, box(1), -extensionFactor(atFrame: f, times: times))
             return (moved.union(r0).intersection(bounds), corner(moved))
         }
         if f > last {
-            guard t - times[last] <= extendAfter(extend) + 1e-6 else { return nil }
+            guard t - times[last] <= extend + 1e-6 else { return nil }
             let r1 = box(samples.count - 1)
             guard samples.count > 1 else { return (r1, corner(r1)) }
             let moved = lerp(r1, box(samples.count - 2), -extensionFactor(atFrame: f, times: times))
@@ -335,18 +306,13 @@ public struct TextTrack: Sendable {
     }
 
     /// How far (in intervals between the first or last two recognized frames, up to 1.5) frame
-    /// `f` before the first or after the last recognized frame is continued. At an end with a
-    /// followed plate's box where the tracker lost it, as far as the time it is held on there:
-    /// the boxes are only `plateFollowStep` apart, and 1.5 of that let a fast car's plate out of
-    /// the mosaic before the time ran out.
+    /// `f` before the first or after the last recognized frame is continued.
     private func extensionFactor(atFrame f: Int, times: [Double]) -> CGFloat {
         if f < first {
-            let k = CGFloat((times[first] - times[f]) / max(times[samples[1].frame] - times[first], 1e-6))
-            return samples[0].tracked && !heldBriefly.before ? k : min(1.5, k)
+            return min(1.5, CGFloat((times[first] - times[f]) / max(times[samples[1].frame] - times[first], 1e-6)))
         }
         let prev = samples[samples.count - 2].frame
-        let k = CGFloat((times[f] - times[last]) / max(times[last] - times[prev], 1e-6))
-        return samples[samples.count - 1].tracked && !heldBriefly.after ? k : min(1.5, k)
+        return min(1.5, CGFloat((times[f] - times[last]) / max(times[last] - times[prev], 1e-6)))
     }
 
     /// First sample with frame >= f (f within first...last).
@@ -369,10 +335,7 @@ public struct TextTrack: Sendable {
     ///   recognized frames the line is not where straight-line motion puts it: 40 % of the
     ///   motion between the recognized boxes. The same over the whole interval (and the larger
     ///   of the two at a recognized frame), so the hidden box does not swell and shrink with
-    ///   every recognition — that pulsing made the mosaic wobble while scrolling. 15 % between
-    ///   a followed plate's boxes `plateFollowStep` apart: too little time for a car to change
-    ///   speed much, and 40 % of a fast car's motion widened its mosaic by twice the plate's
-    ///   width. Between boxes farther apart (the tracker lost it until the next reading), 40 %.
+    ///   every recognition — that pulsing made the mosaic wobble while scrolling.
     /// Added to each hidden part (not to the line box, where a narrow part would get only its
     /// share of it).
     func motionMargin(atFrame f: Int, times: [Double]) -> CGSize {
@@ -395,10 +358,7 @@ public struct TextTrack: Sendable {
         func interval(_ k: Int) -> CGSize {  // from sample k - 1 to sample k
             guard k > 0, k < samples.count else { return .zero }
             let a = samples[k - 1].rect, b = samples[k].rect
-            let close = (samples[k - 1].tracked || samples[k].tracked)
-                && times[samples[k].frame] - times[samples[k - 1].frame] <= 1.5 * plateFollowStep + 1e-6
-            let share: CGFloat = close ? 0.15 : 0.4
-            let motion = CGSize(width: abs(b.midX - a.midX) * share, height: abs(b.midY - a.midY) * share)
+            let motion = CGSize(width: abs(b.midX - a.midX) * 0.4, height: abs(b.midY - a.midY) * 0.4)
             return plus(motion, larger(s(k - 1), s(k)))
         }
         guard samples[lo].frame == f else { return interval(lo) }
@@ -473,8 +433,6 @@ public struct ScreenText: Sendable {
     /// Frames where the picture changes at once (a cut, a switch to another layout): the first
     /// frame after each change.
     let cuts: [Int]
-    /// Read for plates too (`analyzeText`'s `plates`): large frames in parts, plates followed.
-    public var platesRead = true
 
     /// Room around a code `dt` seconds after (or before) it was last found: the camera moves
     /// it meanwhile, more the longer it goes unseen — up to a quarter of its side by 0.5 s.
@@ -503,39 +461,33 @@ public struct ScreenText: Sendable {
     /// `all`). For a line the first to start; for a code the nearest, since two codes side by
     /// side are often read by turns (the first to start was then the other code, and the quad
     /// moved off this one). A code only continues a code. Nil when cancelled.
-    func continuations(of tracks: [TextTrack], all: Bool, places: Set<Int> = [], cancelled: () -> Bool = { false }) -> [Int: TextTrack]? {
-        Self.continuations(of: tracks, times: times, all: all, places: places, cancelled: cancelled)
+    func continuations(of tracks: [TextTrack], all: Bool, cancelled: () -> Bool = { false }) -> [Int: TextTrack]? {
+        Self.continuations(of: tracks, times: times, all: all, cancelled: cancelled)
     }
 
-    /// `places`: tracks continued by any text at the place, as with `all` (a plate's number
-    /// misread for a moment, ・・12 as 12, is too unlike it).
     static func continuations(
-        of tracks: [TextTrack], times: [Double], all: Bool, places: Set<Int> = [], cancelled: () -> Bool = { false }
+        of tracks: [TextTrack], times: [Double], all: Bool, cancelled: () -> Bool = { false }
     ) -> [Int: TextTrack]? {
         let maxGap = all ? 6.0 : 3.0, maxCodeGap = 6.0
-        // By readings: a followed plate's boxes reach past its last reading, over the start of
-        // a misread continuation (12 read for あ 12-34) that then went on unhidden.
-        let byStart = tracks.sorted { $0.firstReading.frame < $1.firstReading.frame }
-        let starts = byStart.map(\.firstReading.frame)
+        let byStart = tracks.sorted { $0.first < $1.first }
+        let starts = byStart.map(\.first)
         var next: [Int: TextTrack] = [:]
         for a in byStart {
             if cancelled() { return nil }
-            let end = a.lastReading
-            let ra = end.rect
-            let ta = times[end.frame]
-            var k = starts.partitionIndex { $0 > end.frame }
+            let ra = a.samples[a.samples.count - 1].rect
+            let ta = times[a.last]
+            var k = starts.partitionIndex { $0 > a.last }
             var nearest: (track: TextTrack, distance: CGFloat)?
-            while k < byStart.count, times[byStart[k].firstReading.frame] - ta <= (a.isCode ? maxCodeGap : maxGap) {
+            while k < byStart.count, times[byStart[k].first] - ta <= (a.isCode ? maxCodeGap : maxGap) {
                 let b = byStart[k]
                 k += 1
-                let rb = b.firstReading.rect
+                let rb = b.samples[0].rect
                 let d = hypot(ra.midX - rb.midX, ra.midY - rb.midY)
                 guard a.isCode == b.isCode,
                       d < (a.isCode ? 3 : 1.5) * max(ra.height, rb.height),
-                      b.firstReading.lineHeight > 0.6 * end.lineHeight,
-                      b.firstReading.lineHeight < 1.6 * end.lineHeight,
-                      all || places.contains(a.id) || places.contains(b.id)
-                          || similarity(normalizedForMatch(a.text), normalizedForMatch(b.text)) >= 0.6
+                      b.samples[0].lineHeight > 0.6 * a.samples[a.samples.count - 1].lineHeight,
+                      b.samples[0].lineHeight < 1.6 * a.samples[a.samples.count - 1].lineHeight,
+                      all || similarity(normalizedForMatch(a.text), normalizedForMatch(b.text)) >= 0.6
                 else { continue }
                 if !a.isCode {
                     nearest = (b, d)
@@ -576,11 +528,11 @@ public struct ScreenText: Sendable {
         // Where that cannot be drawn (cut at the picture's edge, a box no slanted line has),
         // the whole upright box is hidden by `add` (`rels` = [whole]): a part measured along the
         // line is no part of that. False then.
-        func addSlanted(_ rels: [CGRect], lines: [SlantedLine], boxes: [CGRect], slack: CGFloat, margin: CGSize, plate: Bool = false, at f: Int) -> Bool {
+        func addSlanted(_ rels: [CGRect], lines: [SlantedLine], boxes: [CGRect], slack: CGFloat, margin: CGSize, at f: Int) -> Bool {
             guard let anchorLine = lines.last, boxes.allSatisfy({ bounds.insetBy(dx: 1, dy: 1).contains($0) }) else { return false }
             let m = max(margin.width, margin.height)
             var quads: [[CGPoint]] = []
-            for rel in rels + (plate ? [plateRel(aspect: anchorLine.length / max(anchorLine.height, 1))] : []) {
+            for rel in rels {
                 // The same room as an upright line, of the slanted line's height.
                 let q = SlantedLine.quad(lines, rel: rel, along: anchorLine.height * 0.35 + m, across: anchorLine.height * 0.3 + m, slack: slack)
                 guard isDrawableQuad(q) else { return false }
@@ -590,12 +542,12 @@ public struct ScreenText: Sendable {
             slantedAnchors[f] += quads.map { _ in anchorLine.start }
             return true
         }
-        func add(_ rels: [CGRect], line: CGRect, anchor: CGPoint, margin: CGSize = .zero, code: Bool = false, plate: Bool = false, at f: Int) {
+        func add(_ rels: [CGRect], line: CGRect, anchor: CGPoint, margin: CGSize = .zero, code: Bool = false, at f: Int) {
             let h = line.height
             // A line gets room for letters that stick out of its box; a code's box is the code
             // itself, and its blank border (a tenth of the side for a small code) is enough.
             let mx = code ? h * 0.1 : h * 0.35, my = code ? h * 0.1 : h * 0.3
-            for rel in rels + (plate ? [plateRel(aspect: line.width / max(h, 1))] : []) {
+            for rel in rels {
                 let r = CGRect(
                     x: line.minX + rel.minX * line.width, y: line.minY + rel.minY * line.height,
                     width: rel.width * line.width, height: rel.height * line.height)
@@ -619,8 +571,7 @@ public struct ScreenText: Sendable {
             let entry = owner[t.id] ?? 0
             var rels: [CGRect]
             if o.all || o.lines.contains(entry) {
-                // A plate reaches beyond its line.
-                rels = mergeOverlapping([whole] + (o.kinds.contains(.plate) ? t.parts[.plate] ?? [] : []))
+                rels = [whole]
             } else {
                 rels = o.kinds.flatMap { t.parts[$0] ?? [] }
                 if !words.isEmpty, !t.isCode {
@@ -640,21 +591,17 @@ public struct ScreenText: Sendable {
         // longer (glare, focus, fingers); any text at the place counts there.
         // A QR code goes unread while the camera is out of focus or moving: up to 6 s, and up to
         // 3 box heights away (the camera moves meanwhile).
-        // Tracks hiding a plate: their own, or one along their chain of continuations.
-        var plateOf = Set(o.kinds.contains(.plate) ? tracks.filter { $0.parts[.plate] != nil }.map(\.id) : [])
-        guard let next = continuations(of: tracks, all: o.all, places: plateOf, cancelled: cancelled) else { return nil }
-        let byStart = tracks.sorted { $0.firstReading.frame < $1.firstReading.frame }  // as `continuations`
+        guard let next = continuations(of: tracks, all: o.all, cancelled: cancelled) else { return nil }
+        let byStart = tracks.sorted { $0.first < $1.first }
         // Forward then backward: every track of a chain ends with the union of its parts.
         // Parts of a slanted line are measured along it, of an upright one across its box: from
         // one to the other, the whole line is shared.
         for a in byStart {
             guard let b = next[a.id], let ra = relsOf[a.id] else { continue }
-            if plateOf.contains(a.id) { plateOf.insert(b.id) }
             relsOf[b.id] = mergeOverlapping((relsOf[b.id] ?? []) + (a.isTilted == b.isTilted ? ra : [whole]))
         }
         for a in byStart.reversed() {
             guard let b = next[a.id], let rb = relsOf[b.id] else { continue }
-            if plateOf.contains(b.id) { plateOf.insert(a.id) }
             relsOf[a.id] = mergeOverlapping((relsOf[a.id] ?? []) + (a.isTilted == b.isTilted ? rb : [whole]))
         }
         // A code continued by another is not held on past its last reading nor before the
@@ -664,7 +611,6 @@ public struct ScreenText: Sendable {
         for t in tracks {
             if cancelled() { return nil }
             guard let rels = relsOf[t.id] else { continue }
-            let plate = plateOf.contains(t.id)
             hidden.insert(owner[t.id] ?? 0)
             for f in frameRange(t) {
                 if t.isCode, (f > t.last && next[t.id] != nil) || (f < t.first && continued.contains(t.id)) { continue }
@@ -676,16 +622,16 @@ public struct ScreenText: Sendable {
                 }
                 if t.isTilted, let s = t.slantedLines(atFrame: f, times: times, extend: extend(t)),
                    addSlanted(rels, lines: s.lines, boxes: s.boxes, slack: t.tiltSlack(atFrame: f, times: times),
-                              margin: t.motionMargin(atFrame: f, times: times), plate: plate, at: f) {
+                              margin: t.motionMargin(atFrame: f, times: times), at: f) {
                     continue
                 }
                 if t.isTilted {
                     guard let line = t.line(atFrame: f, times: times, extend: extend(t), bounds: bounds), !line.rect.isEmpty else { continue }
-                    add([whole], line: line.rect, anchor: line.anchor, margin: t.motionMargin(atFrame: f, times: times), plate: plate, at: f)
+                    add([whole], line: line.rect, anchor: line.anchor, margin: t.motionMargin(atFrame: f, times: times), at: f)
                     continue
                 }
                 guard let line = t.line(atFrame: f, times: times, extend: extend(t), bounds: bounds), !line.rect.isEmpty else { continue }
-                add(rels, line: line.rect, anchor: line.anchor, margin: t.motionMargin(atFrame: f, times: times), code: t.isCode, plate: plate, at: f)
+                add(rels, line: line.rect, anchor: line.anchor, margin: t.motionMargin(atFrame: f, times: times), code: t.isCode, at: f)
             }
             if let b = next[t.id] {
                 let ra = t.samples[t.samples.count - 1].rect, rb = b.samples[0].rect
@@ -699,9 +645,7 @@ public struct ScreenText: Sendable {
                 // where it is found next (each continued with its motion, as before and after a
                 // track). Without one it moves between the two places.
                 let gapCuts = cuts.filter { $0 > t.last && $0 <= b.first }
-                // A followed plate's boxes may reach over its continuation's start: no gap then.
-                for f in (t.last + 1)..<max(t.last + 1, b.first)
-                where t.isCode || (times[f] > ta + t.extendAfter(extend(t)) && times[f] < tb - b.extendBefore(extend(b))) {
+                for f in (t.last + 1)..<b.first where t.isCode || (times[f] > ta + extend(t) && times[f] < tb - extend(b)) {
                     let u = CGFloat((times[f] - ta) / max(tb - ta, 1e-6))
                     if let (ea, eb) = ends {
                         if let c0 = gapCuts.first, let c1 = gapCuts.last {
@@ -743,13 +687,13 @@ public struct ScreenText: Sendable {
                            let line = SlantedLine(box: r, angle: a0 + (a1 - a0) * u,
                                                   height: max(t.lineHeights[t.lineHeights.count - 1], b.lineHeights[0])),
                            addSlanted(rels, lines: [line], boxes: [r],
-                                      slack: max(t.tiltSlacks[t.tiltSlacks.count - 1], b.tiltSlacks[0]) + abs(a1 - a0) / 2, margin: .zero, plate: plate, at: f) {
+                                      slack: max(t.tiltSlacks[t.tiltSlacks.count - 1], b.tiltSlacks[0]) + abs(a1 - a0) / 2, margin: .zero, at: f) {
                             continue
                         }
-                        add([whole], line: r, anchor: anchor, plate: plate, at: f)
+                        add([whole], line: r, anchor: anchor, at: f)
                         continue
                     }
-                    add(rels, line: r, anchor: anchor, margin: gapMargin, code: t.isCode, plate: plate, at: f)
+                    add(rels, line: r, anchor: anchor, margin: gapMargin, code: t.isCode, at: f)
                 }
             }
         }
@@ -818,15 +762,12 @@ public func withText(_ faces: [FrameFaces], text: ScreenText, mask: TextMask) ->
 /// `recheck` seconds (a change too small for the thumbnail, such as one digit, is read then);
 /// lines are followed between recognized frames by interpolation. With `workers` > 1 the
 /// frames are read by that many worker processes (see TextWorkers.swift; the result is the
-/// same). With `plates` false (plates are not hidden), large frames are not read again in parts
-/// and plates are not followed: both take time. `progress` gets the number of frames done.
+/// same). `progress` gets the number of frames done.
 public func analyzeText(
-    asset: AVURLAsset, info: VideoInfo, interval: Double = 0.1, recheck: Double = 1, workers: Int = 0, plates: Bool = true,
+    asset: AVURLAsset, info: VideoInfo, interval: Double = 0.1, recheck: Double = 1, workers: Int = 0,
     progress: (Int) -> Void
 ) throws -> ScreenText {
     let bounds = CGRect(origin: .zero, size: info.size)
-    // The reading takes all but `plateProgressShare` of the progress, following plates the rest.
-    func report(_ n: Int) { progress(Int(Double(n) * (1 - plateProgressShare))) }
     var builder = TrackBuilder(size: info.size)
     // QR codes are followed by their own builder: a code is never matched to a line of text
     // (the words "QRコード" printed next to it, say).
@@ -840,11 +781,10 @@ public func analyzeText(
     var lastRecognized = Int.min / 2
     var lastTime = -Double.infinity
     var lastThumb: [UInt8]?
-    var lastLines: (lines: [(CGRect, String, VNRecognizedText?)], corners: [[CGPoint]?], fromTile: [Bool]) = ([], [], [])
+    var lastLines: (lines: [(CGRect, String, VNRecognizedText?)], corners: [[CGPoint]?]) = ([], [])
     var lastCodes: (lines: [(CGRect, String, VNRecognizedText?)], corners: [[CGPoint]]) = ([], [])
     var unchangedUntil: Int?  // last frame identical to the last recognized one
     var lastDeep = -Double.infinity  // time of the last recognition that also looked for small QR codes
-    var lastTiles = -Double.infinity  // time of the last recognition that also read parts for plates
     var prevThumb: [UInt8]?  // of the previous frame
     var cuts: [Int] = []
     var pendingCut: Int?  // a change at once, a cut if the next frame looks like it
@@ -865,7 +805,7 @@ public func analyzeText(
     func step(blocking: Bool) throws -> Bool {
         switch steps[applied] {
         case .pin(let u):
-            builder.add(frame: u, lines: lastLines.lines, corners: lastLines.corners, pin: true, fromTile: lastLines.fromTile)
+            builder.add(frame: u, lines: lastLines.lines, corners: lastLines.corners, pin: true)
             codeBuilder.add(frame: u, lines: lastCodes.lines, corners: lastCodes.corners.map { Optional($0) }, pin: true)
         case .read(let f, let job, let since):
             let reading: TextReading
@@ -884,8 +824,7 @@ public func analyzeText(
             lastCodes = codeLines(reading, bounds: bounds)
             // Read again only because time passed: a new line was there since the last
             // reading, too small a change to see (the picture looked the same).
-            builder.add(frame: f, lines: lastLines.lines, corners: lastLines.corners, newSince: since,
-                        fromTile: lastLines.fromTile, tiled: !reading.tiles.isEmpty)
+            builder.add(frame: f, lines: lastLines.lines, corners: lastLines.corners, newSince: since)
             codeBuilder.add(frame: f, lines: lastCodes.lines, corners: lastCodes.corners.map { Optional($0) }, newSince: since)
         }
         applied += 1
@@ -924,14 +863,12 @@ public func analyzeText(
             // recognition: twice a second, and a code once found is followed in between.
             let deep = t - lastDeep >= deepCodeInterval - 1e-6
             if deep { lastDeep = t }
-            let tiles = plates && max(info.size.width, info.size.height) >= plateTileMinSide && t - lastTiles >= plateTileInterval - 1e-6
-            if tiles { lastTiles = t }
             if let pool {
                 // Keep a few readings per worker in flight; more would only pile up results.
                 while steps.count - applied >= 8 * workers { _ = try step(blocking: true) }
-                try pool.submit(job: jobs, frame: i, deep: deep, tiles: tiles)
+                try pool.submit(job: jobs, frame: i, deep: deep)
             } else {
-                ownReading = try recognizeText(image, frame: i, time: t, deep: deep, tiles: tiles)
+                ownReading = try recognizeText(image, frame: i, time: t, deep: deep)
             }
             steps.append(.read(frame: i, job: jobs, newSince: unchanged ? lastRecognized + 1 : nil))
             jobs += 1
@@ -941,16 +878,16 @@ public func analyzeText(
             unchangedUntil = nil
         }
         while applied < steps.count, try step(blocking: false) {}
-        report(done(decoded: i + 1))
+        progress(done(decoded: i + 1))
     }
     if let u = unchangedUntil, u > lastRecognized { steps.append(.pin(u)) }
     if let c = pendingCut { cuts.append(c) }  // at the last frame: nothing after it to differ
     pool?.finish()
     while applied < steps.count {
         _ = try step(blocking: true)
-        report(done(decoded: times.count))
+        progress(done(decoded: times.count))
     }
-    report(times.count)
+    progress(times.count)
 
     var tracks = droppingMixedUpReadings(builder.tracks, times: times)
     for k in tracks.indices {
@@ -958,13 +895,6 @@ public func analyzeText(
         tracks[k].text = mostCommonReading(tracks[k])
         tracks[k].parts = kindParts(tracks[k], size: info.size)
     }
-    markPlatePairs(&tracks)
-    if plates {
-        try followPlates(&tracks, asset: asset, info: info, times: times, cuts: cuts) { share in
-            report(times.count + Int(Double(times.count) * share * plateProgressShare / (1 - plateProgressShare)))
-        }
-    }
-    progress(times.count)
     addContinuations(&tracks, times: times, extend: interval + 0.25, bounds: bounds, size: info.size)
     for c in codeBuilder.tracks {
         var t = TextTrack(id: tracks.count, samples: c.samples)
@@ -1013,8 +943,7 @@ public func analyzeText(
     // Lines fade in and out over a few frames that cannot be read yet: continue each line a
     // little longer than the time between two recognitions.
     return ScreenText(
-        times: times, fps: info.fps, size: info.size, tracks: tracks, entries: entries, extend: interval + 0.25, cuts: cuts,
-        platesRead: plates)
+        times: times, fps: info.fps, size: info.size, tracks: tracks, entries: entries, extend: interval + 0.25, cuts: cuts)
 }
 
 /// Seconds between recognitions that also look for small QR codes (see `recognizeText`).
@@ -1025,7 +954,7 @@ let deepCodeInterval = 0.5
 /// sharpened: Vision missed most codes of 100–160 px, slanted or slightly out of focus, in
 /// the whole frame and found them there (synthetic screen filmed at an angle with glare,
 /// 2026-11-16). That costs ~110 ms (1080p, M3 Max), as much as reading the text.
-func recognizeText(_ image: CIImage, frame: Int, time: Double, deep: Bool = false, tiles readTiles: Bool = false) throws -> TextReading {
+func recognizeText(_ image: CIImage, frame: Int, time: Double, deep: Bool = false) throws -> TextReading {
     let req = VNRecognizeTextRequest()
     req.recognitionLevel = .accurate  // .fast does not read Japanese
     req.recognitionLanguages = ["ja-JP", "en-US"]
@@ -1056,28 +985,9 @@ func recognizeText(_ image: CIImage, frame: Int, time: Double, deep: Bool = fals
             }
         }
     }
-    // Plates in a large frame, read again in parts (see `plateTiles`).
-    var tiles: [(rect: CGRect, observations: [VNRecognizedTextObservation])] = []
-    if readTiles {
-        for (fx, fy) in plateTiles {
-            let part = CGRect(x: ext.minX + ext.width * fx, y: ext.minY + ext.height * fy, width: ext.width / 2, height: ext.height / 2).integral
-            let r = VNRecognizeTextRequest()
-            r.recognitionLevel = .accurate
-            r.recognitionLanguages = ["ja-JP", "en-US"]
-            r.usesLanguageCorrection = false
-            try VNImageRequestHandler(ciImage: image.cropped(to: part).transformed(by: CGAffineTransform(translationX: -part.minX, y: -part.minY)),
-                                      orientation: .up, options: [:]).perform([r])
-            // Only what may be a plate's line: short, with a digit.
-            let kept = (r.results ?? []).filter { o in
-                guard let s = o.topCandidates(1).first?.string else { return false }
-                return s.count <= 24 && s.contains(where: \.isNumber)
-            }
-            tiles.append((CGRect(x: part.minX - ext.minX, y: part.minY - ext.minY, width: part.width, height: part.height), kept))
-        }
-    }
     return TextReading(
         frame: frame, time: time, width: Int(ext.width), height: Int(ext.height),
-        observations: req.results ?? [], tiles: tiles, codes: mergeCodeQuads(quads))
+        observations: req.results ?? [], codes: mergeCodeQuads(quads))
 }
 
 private func codeRequest() -> VNDetectBarcodesRequest {
@@ -1261,7 +1171,7 @@ let codeText = "QRコード"
 
 /// The lines of one reading: box in the frame, the best candidate's string and the candidate,
 /// and each line's corners (relative to its box; nil for a line cut at the picture's edge).
-private func textLines(_ r: TextReading, bounds: CGRect) -> (lines: [(CGRect, String, VNRecognizedText?)], corners: [[CGPoint]?], fromTile: [Bool]) {
+private func textLines(_ r: TextReading, bounds: CGRect) -> (lines: [(CGRect, String, VNRecognizedText?)], corners: [[CGPoint]?]) {
     var lines: [(CGRect, String, VNRecognizedText?)] = [], corners: [[CGPoint]?] = []
     for o in r.observations {
         guard let c = o.topCandidates(1).first, !c.string.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
@@ -1272,92 +1182,8 @@ private func textLines(_ r: TextReading, bounds: CGRect) -> (lines: [(CGRect, St
         let q = [o.topLeft, o.topRight, o.bottomRight, o.bottomLeft].map { CGPoint(x: $0.x * CGFloat(r.width), y: $0.y * CGFloat(r.height)) }
         corners.append(bounds.insetBy(dx: -0.5, dy: -0.5).contains(full) ? q.map { CGPoint(x: ($0.x - rect.minX) / rect.width, y: ($0.y - rect.minY) / rect.height) } : nil)
     }
-    let wholeCount = lines.count
-    // The parts' lines of a plate (`tileLinesTaken`). Without the recognized text: its ranges'
-    // boxes are in the part, and only whole lines are taken from the parts anyway.
-    for tile in r.tiles {
-        var found: [(rect: CGRect, string: String, corners: [CGPoint])] = []
-        for o in tile.observations {
-            guard let c = o.topCandidates(1).first else { continue }
-            let b = o.boundingBox
-            let rect = CGRect(x: tile.rect.minX + b.minX * tile.rect.width, y: tile.rect.minY + b.minY * tile.rect.height,
-                              width: b.width * tile.rect.width, height: b.height * tile.rect.height)
-            let q = [o.topLeft, o.topRight, o.bottomRight, o.bottomLeft].map {
-                CGPoint(x: tile.rect.minX + $0.x * tile.rect.width, y: tile.rect.minY + $0.y * tile.rect.height)
-            }
-            found.append((rect, c.string, q))
-        }
-        let taken = tileLinesTaken(found.map { ($0.rect, $0.string) }, tile: tile.rect, bounds: bounds, existing: lines.map { ($0.0, $0.1) })
-        for k in taken {
-            let l = found[k]
-            let rect = l.rect.intersection(bounds)
-            lines.append((rect, l.string, nil))
-            corners.append(bounds.insetBy(dx: -0.5, dy: -0.5).contains(l.rect)
-                ? l.corners.map { CGPoint(x: ($0.x - rect.minX) / rect.width, y: ($0.y - rect.minY) / rect.height) } : nil)
-        }
-    }
-    return (lines, corners, lines.indices.map { $0 >= wholeCount })
+    return (lines, corners)
 }
-
-private func matchesWhole(_ re: NSRegularExpression, _ s: String) -> Bool {
-    re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
-}
-
-/// The lines read in a part (`tile`) taken: a plate's number line, upper line, or a short line
-/// with a digit just below an upper line (`markPlatePairs`); not one at the left or right edge
-/// of the part inside the frame (cut there, 2026-11-16 → 11-16 looks like a plate; parts are
-/// half a part apart, so a line less than half a part long is whole in another one); and not one over a
-/// line already taken (from the whole frame, or another part) that looks like a plate too. One
-/// over a line that does not is taken as well: the whole frame may misread a plate (1234 for
-/// 12-34) that a part reads.
-func tileLinesTaken(_ found: [(rect: CGRect, string: String)], tile: CGRect, bounds: CGRect, existing: [(rect: CGRect, string: String)]) -> [Int] {
-    func plateLike(_ s: String) -> Bool { matchesWhole(plateRegex, s) || matchesWhole(plateTopRegex, s) }
-    let tops = found.filter { matchesWhole(plateTopRegex, $0.string) }
-    var taken: [Int] = []
-    var kept = existing
-    for (k, l) in found.enumerated() {
-        let below = l.string.trimmingCharacters(in: .whitespaces).count <= plateBelowMaxLength && l.string.contains(where: \.isNumber)
-            && tops.contains { t in
-                t.rect.minY >= l.rect.maxY - 0.5 * t.rect.height && t.rect.minY - l.rect.maxY <= 1.5 * t.rect.height
-                    && abs(t.rect.midX - l.rect.midX) <= 0.75 * t.rect.width
-            }
-        guard plateLike(l.string) || below else { continue }
-        // Cut at the left or right: fewer characters. At the top or bottom a line loses only
-        // the parts of its characters (a plate 2 px over a part's bottom read whole).
-        let margin = max(2, 0.5 * l.rect.height)
-        let cut = (l.rect.minX - tile.minX < margin && tile.minX > bounds.minX + 0.5)
-            || (tile.maxX - l.rect.maxX < margin && tile.maxX < bounds.maxX - 0.5)
-        let rect = l.rect.intersection(bounds)
-        guard !cut, !rect.isEmpty, !kept.contains(where: { overlapShare($0.rect, rect) > 0.5 && (plateLike($0.string) || below) }) else { continue }
-        taken.append(k)
-        kept.append((rect, l.string))
-    }
-    return taken
-}
-
-/// Share of the smaller of `a` and `b` they have in common.
-private func overlapShare(_ a: CGRect, _ b: CGRect) -> CGFloat {
-    let i = a.intersection(b)
-    guard !i.isNull else { return 0 }
-    return i.width * i.height / max(1, min(a.width * a.height, b.width * b.height))
-}
-
-/// Least long side of a frame read again in parts for plates (2026-11-16). Recognition reads a
-/// large frame smaller: on a 4K street video it read no line at all in 20 frames, not even a
-/// sign, where parts of 1920×1080 read a plate 150 px wide; a lower minimum text height did not
-/// help. Parts of half the width and height, half a part apart (3 by 3): where a line is in a
-/// part changes what is read (at 20 frames, a fixed 2 by 2 read the plate at 2, the 3 by 3 at
-/// 9; 2 times larger, the same). Only a plate's lines are taken from the parts.
-let plateTileMinSide: CGFloat = 3000
-
-/// Kinds hidden unless chosen otherwise: all but plates, which are tried (experimental) and make
-/// reading a large video take longer (`plateTileInterval`).
-public let defaultTextKinds = Set(TextKind.allCases).subtracting([.plate])
-/// Least seconds between the recognitions that also read the parts: every recognition took 2.7
-/// times as long on a 4K street video, every 0.3 s 1.6 times and read 25 of the 26 plates'
-/// numbers (every 0.5 s 22, every 1 s 17, without the parts 13).
-let plateTileInterval = 0.3
-let plateTiles: [(CGFloat, CGFloat)] = [0, 0.25, 0.5].flatMap { y in [0, 0.25, 0.5].map { x in (x, y) } }
 
 /// Small grayscale copy of a frame, to tell whether the picture changed.
 private func thumbnail(_ image: CIImage, _ ctx: CIContext) -> [UInt8] {
@@ -1405,11 +1231,6 @@ private struct TrackBuilder {
     var tracks: [TextTrack] = []
     private var pass = 0
     private var lastPass: [Int] = []  // per track
-    /// Recognitions that also read parts (`plateTiles`, every third or so): a track last read
-    /// only in a part is missed only by those, or it broke at every miss there.
-    private var tilePass = 0
-    private var lastTilePass: [Int] = []  // per track
-    private var lastFromTile: [Bool] = []  // per track
 
     init(size: CGSize) { self.size = size }
 
@@ -1418,16 +1239,10 @@ private struct TrackBuilder {
     /// `newSince`: lines not matched to a track have been there since this frame.
     /// `corners`: each line's (or code's) `TextSample.corners`.
     mutating func add(
-        frame: Int, lines: [(CGRect, String, VNRecognizedText?)], corners: [[CGPoint]?]? = nil, pin: Bool = false, newSince: Int? = nil,
-        fromTile: [Bool]? = nil, tiled: Bool = false
+        frame: Int, lines: [(CGRect, String, VNRecognizedText?)], corners: [[CGPoint]?]? = nil, pin: Bool = false, newSince: Int? = nil
     ) {
-        if !pin {
-            pass += 1
-            if tiled { tilePass += 1 }
-        }
-        let open = tracks.indices.filter { k in
-            tracks[k].last < frame && (lastFromTile[k] ? tilePass - lastTilePass[k] : pass - lastPass[k]) <= maxMissed + 1
-        }
+        if !pin { pass += 1 }
+        let open = tracks.indices.filter { tracks[$0].last < frame && pass - lastPass[$0] <= maxMissed + 1 }
         let heights = lines.indices.map { l in TextSample(frame: frame, rect: lines[l].0, string: "", text: nil, corners: corners?[l] ?? nil).lineHeight }
         var matches = matchLines(
             lines.map { ($0.0, $0.1) },
@@ -1448,8 +1263,6 @@ private struct TrackBuilder {
             let isNew = !tracks[k].samples.contains { $0.string == string }
             tracks[k].samples.append(TextSample(frame: frame, rect: rect, string: string, text: isNew ? text : nil, corners: corners?[l] ?? nil))
             lastPass[k] = pass
-            lastTilePass[k] = tilePass
-            lastFromTile[k] = fromTile?[l] ?? false
         }
         for (l, (rect, string, text)) in lines.enumerated() where !usedLines.contains(l) {
             var samples = [TextSample(frame: frame, rect: rect, string: string, text: text, corners: corners?[l] ?? nil)]
@@ -1458,8 +1271,6 @@ private struct TrackBuilder {
             }
             tracks.append(TextTrack(id: tracks.count, samples: samples))
             lastPass.append(pass)
-            lastTilePass.append(tilePass)
-            lastFromTile.append(fromTile?[l] ?? false)
         }
     }
 }
@@ -1609,8 +1420,7 @@ private func kindParts(_ t: TextTrack, size: CGSize) -> [TextKind: [CGRect]] {
     for s in distinctReadings(t) {
         for (kind, range) in findKinds(in: s.string) {
             // No box for the range: hide the whole line rather than drop what was found.
-            let r = relativeBox(s, range: range, size: size, along: t.isTilted) ?? whole
-            out[kind, default: []].append(kind == .plate ? plateBox(r) : r)
+            out[kind, default: []].append(relativeBox(s, range: range, size: size, along: t.isTilted) ?? whole)
         }
     }
     return out.mapValues(mergeOverlapping)
@@ -1853,32 +1663,7 @@ private extension CGPoint {
     func minus(_ p: CGPoint) -> CGPoint { CGPoint(x: x - p.x, y: y - p.y) }
 }
 
-let whole = CGRect(x: 0, y: 0, width: 1, height: 1)
-
-/// The whole plate around its number line `r` (relative to the line): the kana to the left,
-/// the place name and class number above (about as high as the number again), a margin below.
-/// Generous: the plate's own layout varies (cars, motorcycles), and the car around it is not
-/// personal information.
-func plateBox(_ r: CGRect) -> CGRect {
-    CGRect(x: r.minX - 0.45 * r.width, y: r.minY - 0.4 * r.height, width: r.width * 1.65, height: r.height * 2.7)
-}
-
-/// The whole plate from the height of a plate's number line (relative to it; `aspect` its
-/// width / height), wherever the line lies on the plate: a part of the number read (2-34), or
-/// a line continuing one (read differently) has a narrower box than the number, and the plate
-/// measured from its width would be too narrow. `plateWidth` heights to the left of its end,
-/// and to the right of its start.
-func plateRel(aspect: CGFloat) -> CGRect {
-    let w = plateWidth / max(aspect, 0.01)
-    let x0 = min(0, 1 - w), x1 = max(1, w)
-    return CGRect(x: x0, y: -0.4, width: x1 - x0, height: 2.7)
-}
-
-/// A plate's width in heights of its number line: about 4.1 for the digits' own height (330 mm
-/// across, 80 mm digits on a medium plate, not confirmed); Vision's line is higher than the
-/// digits, and the plates tried (made up, 4.7) are wider. Generous.
-let plateWidth: CGFloat = 5
-
+private let whole = CGRect(x: 0, y: 0, width: 1, height: 1)
 
 /// Box of a character range relative to the line box. On a slanted line (`along`), relative to
 /// the line along its slant: from its start (0) to its end (1), as `slantedQuad` draws it.
@@ -1932,85 +1717,9 @@ private let patterns: [(TextKind, NSRegularExpression)] = {
         (.address, "〒\\s?\(digit){3}[\\-‐－ーｰ−]\(digit){4}|(?<![0-9０-９\\-‐－ーｰ−])\(digit){3}[\\-‐－ーｰ−]\(digit){4}(?![0-9０-９\\-‐－ーｰ−])"),
         (.address, "(?:東京都|北海道|(?:京都|大阪)府|[^\\s　、。]{2,3}県)[^\\s　、。]*"),
         (.address, "[^\\s　、。]{1,6}[市区町村郡][^\\s　、。]*[0-9０-９一二三四五六七八九十丁目番地号][^\\s　、。]*"),
-        (.plate, platePattern),
     ]
     return defs.map { ($0.0, try! NSRegularExpression(pattern: $0.1)) }
 }()
-
-/// A plate's number line alone (12-34, ・・12), or the whole plate read as one line (品川 300 あ
-/// 12-34, つくば 30A さ 12-34, 300 あ 12-34 with the place name unread). The kana before the
-/// number is often misread: as $, ※, ぁ, a letter (L) or a digit (ろ as 3, then apart from it).
-/// The digits stand apart (1 2-34), the hyphen may be read as a dash or 一, and a mark may be
-/// read after the number (18-89：, from the bolts or the frame). A line of only digits (no
-/// hyphen, no dots) is not one: too many other lines are; nor one dot after a letter or a digit
-/// (p.12, v.2, 1.5) or a dot alone (.99).
-private let platePattern: String = {
-    let d = "[0-9０-９]", hyphen = "[\\-‐－ーｰ−–—―‑‒一─]", dot = "[・･.·•。]"
-    let kana = "[^\\s0-9０-９A-Za-zＡ-Ｚａ-ｚ・･.·•。\\-‐－ーｰ−–—―‑‒一─]"
-    let mark = "[^\\s0-9０-９A-Za-zＡ-Ｚａ-ｚ\\p{Han}ぁ-んァ-ヶ]"
-    let top = "(?:\(placeName)\\s*\(d)[0-9０-９A-Za-z]{0,2}\\s*|\(d)[0-9０-９A-Za-z]{1,2}\\s*(?=\(kana)))"
-    let number = "(?:\(kana)\\s*|[A-Z]\\s*|\(d)\\s+)?\(d)\\s?\(d)\\s*\(hyphen)\\s*\(d)\\s?\(d)"
-    let dots = "(?:\(kana)\\s*\(dot){1,3}|[・･·•。]\(dot){0,2}|\\.\(dot){1,2})\\s*\(d)(?:\\s?\(d)){0,2}"
-    return "^\\s*\(mark)?\\s*(?:\(top))?(?:\(number)|\(dots))\\s*\(mark)?\\s*$"
-}()
-
-let plateRegex = try! NSRegularExpression(pattern: platePattern)
-
-/// A plate's upper line (`plateTopRegex`) with a line read just below it (its number, however
-/// misread: 33 for ・・33): both are a plate. The upper line's part reaches down over the
-/// number; the line below hides the whole plate around it. Upper lines are too much like other
-/// lines (在庫 100, いいね 245) to count on one reading or one frame: the track's most common
-/// reading is an upper line, and the line below is short (`plateBelowMaxLength`), with a digit,
-/// higher than the upper line (the number is about twice as high), close under it and across
-/// it, at most of the frames both were read at.
-func markPlatePairs(_ tracks: inout [TextTrack]) {
-    let tops = Set(tracks.indices.filter { k in
-        !tracks[k].isCode && plateTopRegex.firstMatch(in: tracks[k].text, range: NSRange(tracks[k].text.startIndex..., in: tracks[k].text)) != nil
-    })
-    guard !tops.isEmpty else { return }
-    var at: [Int: [(track: Int, sample: TextSample)]] = [:]
-    for (k, t) in tracks.enumerated() where !t.isCode {
-        for s in t.samples { at[s.frame, default: []].append((k, s)) }
-    }
-    for k in tops.sorted() {
-        var together: [Int: Int] = [:], under: [Int: Int] = [:]  // track → frames read with the upper line, with it below
-        for s in tracks[k].samples {
-            let top = s.rect
-            for (m, b) in at[s.frame] ?? [] where m != k && !tops.contains(m) {
-                together[m, default: 0] += 1
-                let r = b.rect
-                guard r.maxY <= top.minY + 0.3 * top.height, top.minY - r.maxY <= 1.5 * top.height,
-                      r.height >= 1.2 * top.height, r.height <= 3.5 * top.height,
-                      abs(r.midX - top.midX) <= 0.75 * top.width,
-                      b.string.trimmingCharacters(in: .whitespaces).count <= plateBelowMaxLength, b.string.contains(where: \.isNumber)
-                else { continue }
-                under[m, default: 0] += 1
-            }
-        }
-        var paired = false
-        for (m, n) in under where 2 * n > together[m] ?? 0 {
-            if tracks[m].parts[.plate] == nil { tracks[m].parts[.plate] = [plateBox(whole)] }
-            paired = true
-        }
-        if paired { tracks[k].parts[.plate] = [CGRect(x: -0.35, y: -3.2, width: 1.7, height: 4.5)] }
-    }
-}
-
-/// Longest line under a plate's upper line taken for its number (`markPlatePairs`): ふ・・33 and
-/// misreadings of it, with a mark or two.
-let plateBelowMaxLength = 8
-
-/// A place name on a plate: kanji, kana (つくば).
-private let placeName = "[\\p{Han}ぁ-んァ-ヶ]{1,5}"
-
-/// The upper line of a plate alone: the place name and the class number (品川 300, 岡崎430,
-/// 尾張小牧100), with a mark read before or after it (•岡崎430', *三河330*). Too much like other
-/// lines (残り 100) to be a plate by itself: one only with a line read just below it.
-let plateTopRegex: NSRegularExpression = {
-    let mark = "[^\\s0-9０-９A-Za-zＡ-Ｚａ-ｚ\\p{Han}ぁ-んァ-ヶ]"
-    return try! NSRegularExpression(pattern: "^\\s*\(mark)?\\s*\(placeName)\\s*[0-9０-９][0-9０-９A-Za-z]{1,2}\\s*\(mark)?\\s*$")
-}()
-
 
 /// Personal information in one line: (kind, range).
 func findKinds(in s: String) -> [(TextKind, Range<String.Index>)] {
@@ -2253,15 +1962,6 @@ func selfCheckMask() -> [String] {
     expect(m.frames[45].count == 2, "chain: later track keeps the earlier parts (\(m.frames[45].count))")
     expect(!m.frames[15].isEmpty && !m.frames[35].isEmpty, "chain: gaps hidden")
     expect(m.hidden == [1, 2, 3], "chain: all entries hidden (\(m.hidden.sorted()))")
-
-    // A plate: hidden whole around its number line (the kana to the left, the place name above).
-    var plate = track(0, 0...10, y: 500, "あ 12-34", x: 400)
-    plate.parts = [.plate: [plateBox(whole)]]
-    let pm = screen([plate]).mask(TextMaskOptions(kinds: [.plate], words: [], lines: []))
-    let pu = pm.frames[5].reduce(CGRect.null) { $0.union($1) }
-    expect(pu.minX <= 400 - 0.4 * 600 && pu.maxX >= 1000 - 1 && pu.minY <= 500 - 0.4 * 40 && pu.maxY >= 500 + 2.2 * 40,
-           "plate: hidden whole around the number line (\(pu))")
-    expect(screen([plate]).mask(TextMaskOptions(kinds: [.number], words: [], lines: [])).frames[5].isEmpty, "plate: off when not chosen")
 
     // Not a continuation: other text at the place.
     var e = track(0, 0...10, y: 500, "電話 090-1234-5678")
@@ -2568,143 +2268,6 @@ func selfCheckMask() -> [String] {
                "slanted: the rest of the line and the empty corner of its box are kept")
     }
     expect(!slantedTrack(1, at: CGPoint(x: 500, y: 500), length: 40).isTilted, "slanted: a short line keeps its upright box")
-    // A slanted plate: the whole plate along its slant (the place name above the number line).
-    let pc = CGPoint(x: 500, y: 500), pl: CGFloat = 160, ph: CGFloat = 40, pa: CGFloat = 15 * .pi / 180
-    func plateTrack(at c: CGPoint) -> TextTrack {
-        var t = TextTrack(id: 3, samples: [0, 15, 30].map { f in
-            let q = slantedLine(c, length: pl, height: ph, degrees: 15), box = boundingBox(q)
-            let rel = q.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) }
-            return TextSample(frame: f, rect: box, string: "あ 12-34", text: nil, corners: rel)
-        })
-        t.text = "あ 12-34"
-        t.measureTilt(times: times)
-        t.parts = [.plate: [plateBox(whole)]]
-        t.makeSteady(times: times)
-        return t
-    }
-    let sp = plateTrack(at: pc)
-    let spm = screen([sp]).mask(TextMaskOptions(kinds: [.plate], words: [], lines: []))
-    func onPlate(_ x: CGFloat, _ y: CGFloat) -> CGPoint {  // x along the line 0...1, y across it 0...1
-        let u = (x - 0.5) * pl, v = (y - 0.5) * ph
-        return CGPoint(x: pc.x + u * cos(pa) - v * sin(pa), y: pc.y + u * sin(pa) + v * cos(pa))
-    }
-    expect(sp.isTilted && spm.frames[15].isEmpty && !spm.slanted[15].isEmpty
-           && [onPlate(-0.4, -0.35), onPlate(1.15, -0.35), onPlate(1.15, 2.25), onPlate(-0.4, 2.25)].allSatisfy { p in spm.slanted[15].contains { contains($0, p) } }
-           && !spm.slanted[15].contains { contains($0, onPlate(0.5, 4)) },
-           "slanted: a plate is hidden whole along its slant")
-    // A line checked to be hidden whole, or all text hidden: still the whole plate.
-    let plateEntry = screen([sp])
-    for (o, what) in [(TextMaskOptions(kinds: [.plate], words: [], lines: [sp.id + 1]), "checked"), (TextMaskOptions(kinds: [.plate], words: [], lines: [], all: true), "all")] {
-        let lm = ScreenText(times: times, fps: 30, size: size, tracks: plateEntry.tracks, entries: plateEntry.entries, extend: 0.1, cuts: []).mask(o)
-        expect([onPlate(-0.4, -0.35), onPlate(1.15, 2.25)].allSatisfy { p in lm.slanted[15].contains { contains($0, p) } }, "plate: hidden whole when \(what)")
-    }
-    // The number misread for a moment (12 for あ 12-34, a narrower box on its right): continued
-    // by its place, and the whole plate hidden there and in between, measured from its height.
-    func uprightLine(_ id: Int, _ frames: [Int], x: CGFloat, width: CGFloat, _ text: String) -> TextTrack {
-        var t = TextTrack(id: id, samples: frames.map { TextSample(frame: $0, rect: CGRect(x: x, y: 500, width: width, height: 40), string: text, text: nil) })
-        t.text = text
-        return t
-    }
-    var plateUp = uprightLine(0, [0, 10], x: 400, width: 160, "あ 12-34")
-    plateUp.parts = [.plate: [plateBox(whole)]]
-    let misreadNumber = uprightLine(1, [20, 30], x: 480, width: 80, "12")
-    let chainMask = screen([plateUp, misreadNumber]).mask(TextMaskOptions(kinds: [.plate], words: [], lines: []))
-    for f in [15, 25] {
-        let u = chainMask.frames[f].reduce(CGRect.null) { $0.union($1) }
-        expect(u.minX <= 380 && u.maxX >= 600 && u.maxY >= 500 + 2 * 40, "plate: a misread continuation hides the whole plate at \(f) (\(u))")
-    }
-    // A plate's upper line alone is no plate (残り 100); with a line read just below it (its
-    // number, misread 33 for ・・33), both are.
-    for p in ["三河330", "*三河330*", "尾張小牧100", "品川 300", "つくば 30A", "•岡崎430'"] {
-        expect(plateTopRegex.firstMatch(in: p, range: NSRange(p.startIndex..., in: p)) != nil, "plate's upper line: \(p)")
-    }
-    for p in ["12-34", "第300回", "東京都千代田区1", "品川300さ12-34", "電話 0901234"] {
-        expect(plateTopRegex.firstMatch(in: p, range: NSRange(p.startIndex..., in: p)) == nil, "no plate's upper line: \(p)")
-    }
-    func line(_ id: Int, _ text: String, _ r: CGRect) -> TextTrack {
-        var t = TextTrack(id: id, samples: [0, 10].map { TextSample(frame: $0, rect: r, string: text, text: nil) })
-        t.text = text
-        return t
-    }
-    var pairs = [line(0, "三河330", CGRect(x: 400, y: 560, width: 120, height: 30)), line(1, "33", CGRect(x: 430, y: 500, width: 80, height: 50)),
-                 line(2, "残り 100", CGRect(x: 900, y: 560, width: 120, height: 30)), line(3, "ふ，", CGRect(x: 1400, y: 300, width: 80, height: 50))]
-    // Not a plate: a long line under it (a sentence), one no higher than it (a table's next row).
-    pairs += [line(4, "在庫 100", CGRect(x: 400, y: 960, width: 120, height: 30)), line(5, "お支払い金額 12,345円", CGRect(x: 380, y: 900, width: 300, height: 50)),
-              line(6, "いいね 245", CGRect(x: 900, y: 960, width: 120, height: 30)), line(7, "12", CGRect(x: 930, y: 920, width: 60, height: 30))]
-    // Below it at one frame of the two both were read at: not most.
-    var halfBelow = line(9, "33", CGRect(x: 1430, y: 500, width: 80, height: 50))
-    halfBelow.samples = [halfBelow.samples[0], TextSample(frame: 10, rect: CGRect(x: 1430, y: 200, width: 80, height: 50), string: "33", text: nil)]
-    pairs += [line(8, "品川 300", CGRect(x: 1400, y: 560, width: 120, height: 30)), halfBelow]
-    markPlatePairs(&pairs)
-    expect(pairs[0].parts[.plate] != nil && pairs[1].parts[.plate] != nil && pairs[2].parts[.plate] == nil && pairs[3].parts[.plate] == nil,
-           "plate: an upper line and the line below it, not a lone upper line nor a line far off")
-    expect(pairs[4...9].allSatisfy { $0.parts[.plate] == nil }, "plate: no upper line with a long line, a line as low, or a line below it at half the frames")
-    // Lines read in a part of a large frame: a plate's lines only, not cut at the part's edge
-    // inside the frame, not over a plate-like line already taken (but over another line).
-    let tileFound: [(rect: CGRect, string: String)] = [
-        (CGRect(x: 500, y: 500, width: 150, height: 40), "12-34"),
-        (CGRect(x: 500, y: 700, width: 150, height: 40), "在庫"),
-        (CGRect(x: 1880, y: 500, width: 38, height: 40), "11-16"),
-        (CGRect(x: 0, y: 600, width: 150, height: 40), "56-78"),
-        (CGRect(x: 800, y: 300, width: 150, height: 40), "21-44"),
-        (CGRect(x: 800, y: 800, width: 150, height: 40), "33-55"),
-        (CGRect(x: 1000, y: 400, width: 120, height: 30), "三河 330"),
-        (CGRect(x: 1030, y: 340, width: 80, height: 50), "33"),
-        (CGRect(x: 1400, y: 1050, width: 90, height: 60), "=90-70"),
-    ]
-    let tileTaken = tileLinesTaken(tileFound, tile: CGRect(x: 0, y: 0, width: 1920, height: 1080), bounds: CGRect(x: 0, y: 0, width: 3840, height: 2160),
-                                   existing: [(CGRect(x: 800, y: 300, width: 150, height: 40), "21-44"), (CGRect(x: 800, y: 800, width: 150, height: 40), "3355")])
-    expect(tileTaken == [0, 3, 5, 6, 7, 8], "plate: a part's lines taken (\(tileTaken))")
-    // A plate followed by the tracker: held on only briefly at an end the tracker went as far as
-    // it could, as other lines at an end where it lost the plate; less room for motion only
-    // between its close boxes.
-    func plateSample(_ f: Int, x: CGFloat, tracked: Bool = false) -> TextSample {
-        TextSample(frame: f, rect: CGRect(x: x, y: 500, width: 160, height: 40), string: "あ 12-34", text: nil, tracked: tracked)
-    }
-    var followedPlate = TextTrack(id: 0, samples: [plateSample(0, x: 400)])
-    followedPlate.addFollowed([plateSample(3, x: 700, tracked: true), plateSample(30, x: 1000, tracked: true)], heldBriefly: (true, false))
-    var unfollowed = TextTrack(id: 0, samples: [plateSample(0, x: 400), plateSample(3, x: 700), plateSample(30, x: 1000)])
-    followedPlate.makeSteady(times: times)
-    unfollowed.makeSteady(times: times)
-    expect(followedPlate.extendBefore(0.35) == plateHeldExtend && followedPlate.extendAfter(0.35) == 0.35 && unfollowed.extendBefore(0.35) == 0.35,
-           "plate: held on briefly only at an end the tracker went as far as it could")
-    expect(followedPlate.motionMargin(atFrame: 2, times: times).width < unfollowed.motionMargin(atFrame: 2, times: times).width * 0.5
-           && followedPlate.motionMargin(atFrame: 20, times: times).width == unfollowed.motionMargin(atFrame: 20, times: times).width,
-           "plate: less room for motion only between a followed plate's close boxes")
-    // Lost after a box 0.1 s past its last reading: its motion carried on as long as it is held
-    // on (0.35 s), not 1.5 of the 0.1 s; at an end followed the whole way, 1.5 of it.
-    var lost = TextTrack(id: 0, samples: [plateSample(0, x: 400)])
-    lost.addFollowed([plateSample(27, x: 900, tracked: true), plateSample(30, x: 1000, tracked: true)], heldBriefly: (false, false))
-    var reachedEnd = lost
-    reachedEnd.addFollowed([], heldBriefly: (false, true))
-    let wide = CGRect(x: 0, y: 0, width: 4000, height: 2000)
-    let lostAt = lost.rect(atFrame: 39, times: times, extend: 0.35, bounds: wide), reachedAt = reachedEnd.rect(atFrame: 35, times: times, extend: 0.35, bounds: wide)
-    expect((lostAt?.maxX ?? 0) >= 1440 && (reachedAt?.maxX ?? .infinity) <= 1320,
-           "plate: lost after a close box, its motion carried on while held on (\(String(describing: lostAt)), \(String(describing: reachedAt)))")
-    // A followed plate's boxes reach past its last reading over the start of a misread
-    // continuation: still continued (by readings), and the plate hidden all along it.
-    var reachPast = uprightLine(0, [0, 10], x: 400, width: 160, "あ 12-34")
-    reachPast.parts = [.plate: [plateBox(whole)]]
-    reachPast.addFollowed(stride(from: 13, through: 40, by: 3).map { f in
-        TextSample(frame: f, rect: CGRect(x: 400, y: 500, width: 160, height: 40), string: "あ 12-34", text: nil, tracked: true)
-    }, heldBriefly: (false, true))
-    let misreadLong = uprightLine(1, Array(stride(from: 20, through: 90, by: 10)), x: 480, width: 80, "12")
-    let reachMask = screen([reachPast, misreadLong]).mask(TextMaskOptions(kinds: [.plate], words: [], lines: []))
-    let reachUnion = reachMask.frames[60].reduce(CGRect.null) { $0.union($1) }
-    expect(reachUnion.minX <= 380 && reachUnion.maxY >= 500 + 2 * 40, "plate: a misread continuation within a followed plate's boxes still hides the plate (\(reachUnion))")
-    // Slanted, then read upright (a short reading has no slant): the plate in the upright box,
-    // and in between.
-    let afterSlant = uprightLine(1, [40, 60], x: sp.samples[2].rect.minX, width: sp.samples[2].rect.width, "12")
-    let mixMask = screen([sp, afterSlant]).mask(TextMaskOptions(kinds: [.plate], words: [], lines: []))
-    for f in [35, 50] {
-        let u = mixMask.frames[f].reduce(CGRect.null) { $0.union($1) }
-        expect(u.maxY >= 540 + 40 * 0.9, "plate: slanted then upright, the plate above at \(f) (\(u))")
-    }
-    // Cut at the picture's edge: the whole upright box, and the plate above it with it.
-    let ep = plateTrack(at: CGPoint(x: pc.x - boundingBox(slantedLine(pc, length: pl, height: ph, degrees: 15)).minX + 0.5, y: pc.y))
-    let epm = screen([ep]).mask(TextMaskOptions(kinds: [.plate], words: [], lines: []))
-    let epBox = ep.samples[1].rect, epUnion = epm.frames[15].reduce(CGRect.null) { $0.union($1) }
-    expect(epm.slanted[15].isEmpty && epUnion.maxY >= epBox.maxY + epBox.height, "slanted: a plate cut at the edge is hidden upright with the plate above (\(epUnion), \(epBox))")
     // At the edge of the picture the line may be cut: the whole upright box instead.
     let edgeBox = boundingBox(slantedLine(.zero, length: 400, height: 24, degrees: 20))
     let et = slantedTrack(2, at: CGPoint(x: -edgeBox.minX + 0.5, y: 500))
