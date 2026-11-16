@@ -29,6 +29,15 @@ struct TextSample: @unchecked Sendable {
     /// code or the line), relative to `rect` (0...1 across it). Nil for a line cut at the edge
     /// of the picture (its corners lie outside `rect`).
     var corners: [CGPoint]? = nil
+
+    /// Height of the line itself: across its corners (the larger side, for a line seen in
+    /// perspective), else its box. On a slanted line the box is far higher than the line, and
+    /// comparing boxes put a line read in part (shorter, so a lower box) apart from itself.
+    var lineHeight: CGFloat {
+        guard let c = corners, c.count == 4 else { return rect.height }
+        let q = place(c, in: rect)
+        return max(hypot(q[0].x - q[3].x, q[0].y - q[3].y), hypot(q[1].x - q[2].x, q[1].y - q[2].y))
+    }
 }
 
 /// One line followed across frames (it may scroll).
@@ -61,7 +70,16 @@ public struct TextTrack: Sendable {
     /// upright line, and for one whose slant is not known well enough: it is then hidden by
     /// its upright box, as before. See `measureTilt`.
     fileprivate(set) var tilts: [CGFloat] = []
-    /// Hidden by slanted boxes along the line (`slantedQuad`), with parts measured along it.
+    /// How far a reading in the window of each of `tilts` is from it (at least `minTiltSlack`):
+    /// the slant may be off by as much, which turns the ends of a long line off the slanted
+    /// box; that much room is added across the line (see `SlantedLine.quad`).
+    fileprivate(set) var tiltSlacks: [CGFloat] = []
+    /// The line's own height at the recognized frames (`TextSample.lineHeight`, averaged as
+    /// `tilts`). The height found again from the box and the slant shrinks by about the
+    /// length × the error of the slant (9 px for 0.5° on a line of 800 px), so the larger of
+    /// the two is used.
+    fileprivate(set) var lineHeights: [CGFloat] = []
+    /// Hidden by slanted boxes along the line (`SlantedLine`), with parts measured along it.
     var isTilted: Bool { !tilts.isEmpty }
 
     /// A line on a screen filmed at an angle is slanted, and its upright box also covers the
@@ -72,22 +90,35 @@ public struct TextTrack: Sendable {
     /// the line cannot be found again from its box (see `slantedBox`).
     mutating func measureTilt(times: [Double], window: Double = 0.25) {
         tilts = []
+        tiltSlacks = []
+        lineHeights = []
         guard !isCode else { return }
+        // Along the middle of the line, as parts are measured (`relativeBox(along:)`).
         let measured: [CGFloat?] = samples.map { s in
             guard let c = s.corners, c.count == 4 else { return nil }
             let q = place(c, in: s.rect)
-            let length = hypot(q[1].x - q[0].x, q[1].y - q[0].y), height = hypot(q[0].x - q[3].x, q[0].y - q[3].y)
-            guard height > 0, length >= 2.5 * height else { return nil }
-            return atan2(q[1].y - q[0].y, q[1].x - q[0].x)
+            let start = CGPoint(x: (q[0].x + q[3].x) / 2, y: (q[0].y + q[3].y) / 2)
+            let end = CGPoint(x: (q[1].x + q[2].x) / 2, y: (q[1].y + q[2].y) / 2)
+            let height = s.lineHeight
+            guard height > 0, hypot(end.x - start.x, end.y - start.y) >= 2.5 * height else { return nil }
+            return atan2(end.y - start.y, end.x - start.x)
         }
         let known = measured.compactMap { $0 }
         guard !known.isEmpty, known.count * 2 >= samples.count else { return }
         let median = known.sorted()[known.count / 2]
         guard abs(median) >= minTilt, abs(median) <= maxTilt else { return }
         let ts = samples.map { times[$0.frame] }
+        func within(_ k: Int) -> [Int] { samples.indices.filter { abs(ts[$0] - ts[k]) <= window + 1e-6 } }
         tilts = samples.indices.map { k in
-            let near = samples.indices.compactMap { abs(ts[$0] - ts[k]) <= window + 1e-6 ? measured[$0] : nil }
+            let near = within(k).compactMap { measured[$0] }
             return near.isEmpty ? median : near.reduce(0, +) / CGFloat(near.count)
+        }
+        tiltSlacks = samples.indices.map { k in
+            max(minTiltSlack, within(k).compactMap { measured[$0].map { abs($0 - tilts[k]) } }.max() ?? abs(median - tilts[k]))
+        }
+        lineHeights = samples.indices.map { k in
+            let near = within(k).filter { measured[$0] != nil }.map { samples[$0].lineHeight }
+            return near.isEmpty ? 0 : near.reduce(0, +) / CGFloat(near.count)
         }
     }
 
@@ -103,19 +134,47 @@ public struct TextTrack: Sendable {
         return tilts[lo - 1] + (tilts[lo] - tilts[lo - 1]) * u
     }
 
-    /// The boxes to draw a slanted line from at frame `f`: the line box, and before the first
-    /// and after the last recognized frame both where it was seen and where its motion takes
-    /// it (`line` gives their union, from which no slanted line can be found). Nil where
-    /// `line` gives nothing.
-    func lineBoxes(atFrame f: Int, times: [Double], extend: Double) -> [CGRect]? {
+    /// `tiltSlacks` and `lineHeights` at frame `f`, as `tilt`. Before the first and after the
+    /// last recognized frame the slant is held while the line may still be turning: the
+    /// change between the last two readings, as far as the line is continued, is added.
+    func tiltSlack(atFrame f: Int, times: [Double]) -> CGFloat {
+        guard isTilted else { return 0 }
+        if f < first || f > last {
+            let k = f < first ? 0 : samples.count - 1, j = f < first ? min(1, samples.count - 1) : max(0, samples.count - 2)
+            return tiltSlacks[k] + abs(tilts[k] - tilts[j]) * extensionFactor(atFrame: f, times: times)
+        }
+        let lo = sampleIndex(atOrAfter: f)
+        return samples[lo].frame == f || lo == 0 ? tiltSlacks[lo] : max(tiltSlacks[lo - 1], tiltSlacks[lo])
+    }
+
+    func lineHeight(atFrame f: Int, times: [Double]) -> CGFloat {
+        guard isTilted else { return 0 }
+        if f <= first { return lineHeights[0] }
+        if f >= last { return lineHeights[lineHeights.count - 1] }
+        let lo = sampleIndex(atOrAfter: f)
+        return samples[lo].frame == f || lo == 0 ? lineHeights[lo] : max(lineHeights[lo - 1], lineHeights[lo])
+    }
+
+    /// The slanted line at frame `f`, from the boxes `line` would give: the line box, and
+    /// before the first and after the last recognized frame both where it was seen and where
+    /// its motion takes it (`line` gives their union, from which no slanted line can be found;
+    /// the two are covered as one by `SlantedLine.quad`). Also the boxes, to tell a line cut
+    /// at the picture's edge. Nil where `line` gives nothing or no slanted line has the box.
+    func slantedLines(atFrame f: Int, times: [Double], extend: Double) -> (lines: [SlantedLine], boxes: [CGRect])? {
+        var boxes: [CGRect]
         if f < first || f > last {
             let before = f < first
             guard (before ? times[first] - times[f] : times[f] - times[last]) <= extend + 1e-6 else { return nil }
             let k = before ? 0 : samples.count - 1
-            guard samples.count > 1 else { return [box(k)] }
-            return [box(k), lerp(box(k), box(before ? 1 : samples.count - 2), -extensionFactor(atFrame: f, times: times))]
+            boxes = [box(k)]
+            if samples.count > 1 { boxes.append(lerp(box(k), box(before ? 1 : samples.count - 2), -extensionFactor(atFrame: f, times: times))) }
+        } else {
+            guard let r = line(atFrame: f, times: times, extend: extend, bounds: .infinite)?.rect else { return nil }
+            boxes = [r]
         }
-        return line(atFrame: f, times: times, extend: extend, bounds: .infinite).map { [$0.rect] }
+        let angle = tilt(atFrame: f, times: times), height = lineHeight(atFrame: f, times: times)
+        let lines = boxes.compactMap { SlantedLine(box: $0, angle: angle, height: height) }
+        return lines.count == boxes.count ? (lines, boxes) : nil
     }
 
     private func box(_ k: Int) -> CGRect { steady.isEmpty ? samples[k].rect : steady[k].rect }
@@ -128,7 +187,8 @@ public struct TextTrack: Sendable {
     /// window is the slack, added to what is hidden (see `motionMargin`), so the hidden box
     /// contains the one drawn from the recognized boxes. Where the fit is off by more than the
     /// line height (a jump the tracker joined, a sudden stop), the recognized box is used.
-    /// Made after the line-below and wrap checks, which keep using the recognized boxes.
+    /// Made after the line-below and wrap checks, which keep using the recognized boxes, and
+    /// after `measureTilt`.
     mutating func makeSteady(times: [Double], window: Double = 0.25) {
         let ts = samples.map { times[$0.frame] }
         steady = samples.indices.map { k in
@@ -146,7 +206,9 @@ public struct TextTrack: Sendable {
             }
             let x0 = fit(\.minX), x1 = fit(\.maxX), y0 = fit(\.minY), y1 = fit(\.maxY)
             let slack = CGSize(width: max(x0.slack, x1.slack), height: max(y0.slack, y1.slack))
-            guard max(slack.width, slack.height) <= raw.height, x1.value > x0.value, y1.value > y0.value else { return (raw, .zero) }
+            // Measured on the line's own height: a slanted line's box is many times higher.
+            let limit = isTilted ? max(lineHeights[k], 1) : raw.height
+            guard max(slack.width, slack.height) <= limit, x1.value > x0.value, y1.value > y0.value else { return (raw, .zero) }
             return (CGRect(x: x0.value, y: y0.value, width: x1.value - x0.value, height: y1.value - y0.value), slack)
         }
         guard isCode, samples.allSatisfy({ $0.corners?.count == 4 }) else { return }
@@ -185,9 +247,11 @@ public struct TextTrack: Sendable {
         }
         let lo = sampleIndex(atOrAfter: f)
         guard samples[lo].frame != f, lo > 0 else { return [place(steadyCorners[lo], in: box(lo))] }
-        if let c = cuts.first(where: { $0 > samples[lo - 1].frame && $0 <= samples[lo].frame }) {
-            let k = f < c ? lo - 1 : lo
-            return [place(steadyCorners[k], in: box(k))]
+        let between = cuts.filter { $0 > samples[lo - 1].frame && $0 <= samples[lo].frame }
+        if let c0 = between.first, let c1 = between.last {
+            // Between two cuts, a third shot: where it was before and where it is after.
+            let before = place(steadyCorners[lo - 1], in: box(lo - 1)), after = place(steadyCorners[lo], in: box(lo))
+            return f < c0 ? [before] : f >= c1 ? [after] : [before, after]
         }
         let u = CGFloat((t - times[samples[lo - 1].frame]) / max(times[samples[lo].frame] - times[samples[lo - 1].frame], 1e-6))
         return [place(lerpPoints(steadyCorners[lo - 1], steadyCorners[lo], u), in: lerp(box(lo - 1), box(lo), u))]
@@ -335,6 +399,9 @@ public struct TextMask: Sendable {
     /// Slanted lines (and parts of them) to mosaic for every decoded frame: four corners each,
     /// margin included, along the line on a screen filmed at an angle (see `TextTrack.measureTilt`).
     public let slanted: [[[CGPoint]]]
+    /// For each quad in `slanted`, where its line starts (bottom left, without the margin): the
+    /// mosaic blocks of the quad line up with it along the slant (see `slantedBlocks`).
+    public let slantedAnchors: [[CGPoint]]
     /// Entries that contain one of the words.
     public let wordHits: Set<Int>
     /// Entries with something hidden.
@@ -412,7 +479,8 @@ public struct ScreenText: Sendable {
                 let d = hypot(ra.midX - rb.midX, ra.midY - rb.midY)
                 guard a.isCode == b.isCode,
                       d < (a.isCode ? 3 : 1.5) * max(ra.height, rb.height),
-                      rb.height > 0.6 * ra.height, rb.height < 1.6 * ra.height,
+                      b.samples[0].lineHeight > 0.6 * a.samples[a.samples.count - 1].lineHeight,
+                      b.samples[0].lineHeight < 1.6 * a.samples[a.samples.count - 1].lineHeight,
                       all || similarity(normalizedForMatch(a.text), normalizedForMatch(b.text)) >= 0.6
                 else { continue }
                 if !a.isCode {
@@ -446,26 +514,29 @@ public struct ScreenText: Sendable {
         var anchors = [[CGPoint]](repeating: [], count: times.count)
         var codes = [[[CGPoint]]](repeating: [], count: times.count)
         var slanted = [[[CGPoint]]](repeating: [], count: times.count)
+        var slantedAnchors = [[CGPoint]](repeating: [], count: times.count)
         var wordHits = Set<Int>()
         var hidden = Set<Int>()
         var relsOf: [Int: [CGRect]] = [:]
-        // `tilt`: a slanted line (its `rels` measured along it), hidden by slanted boxes along
-        // it. Where that cannot be drawn (cut at the picture's edge, a box no slanted line has),
-        // the whole upright box is hidden: a part measured along the line is no part of that.
-        func add(_ rels: [CGRect], line: CGRect, anchor: CGPoint, margin: CGSize = .zero, code: Bool = false, at f: Int, tilt: CGFloat? = nil) {
-            var rels = rels
-            if let tilt, !code {
-                if bounds.insetBy(dx: 1, dy: 1).contains(line), let b = slantedBox(line, angle: tilt) {
-                    // The same room as an upright line, of the slanted line's height.
-                    let m = max(margin.width, margin.height)
-                    let quads = rels.compactMap { slantedQuad(line, angle: tilt, rel: $0, along: b.height * 0.35 + m, across: b.height * 0.3 + m) }
-                    if quads.count == rels.count {
-                        slanted[f] += quads
-                        return
-                    }
-                }
-                rels = [whole]
+        // A slanted line (its `rels` measured along it) is hidden by slanted boxes along it.
+        // Where that cannot be drawn (cut at the picture's edge, a box no slanted line has),
+        // the whole upright box is hidden by `add` (`rels` = [whole]): a part measured along the
+        // line is no part of that. False then.
+        func addSlanted(_ rels: [CGRect], lines: [SlantedLine], boxes: [CGRect], slack: CGFloat, margin: CGSize, at f: Int) -> Bool {
+            guard let anchorLine = lines.last, boxes.allSatisfy({ bounds.insetBy(dx: 1, dy: 1).contains($0) }) else { return false }
+            let m = max(margin.width, margin.height)
+            var quads: [[CGPoint]] = []
+            for rel in rels {
+                // The same room as an upright line, of the slanted line's height.
+                let q = SlantedLine.quad(lines, rel: rel, along: anchorLine.height * 0.35 + m, across: anchorLine.height * 0.3 + m, slack: slack)
+                guard isDrawableQuad(q) else { return false }
+                quads.append(q)
             }
+            slanted[f] += quads
+            slantedAnchors[f] += quads.map { _ in anchorLine.start }
+            return true
+        }
+        func add(_ rels: [CGRect], line: CGRect, anchor: CGPoint, margin: CGSize = .zero, code: Bool = false, at f: Int) {
             let h = line.height
             // A line gets room for letters that stick out of its box; a code's box is the code
             // itself, and its blank border (a tenth of the side for a small code) is enough.
@@ -474,7 +545,9 @@ public struct ScreenText: Sendable {
                 let r = CGRect(
                     x: line.minX + rel.minX * line.width, y: line.minY + rel.minY * line.height,
                     width: rel.width * line.width, height: rel.height * line.height)
-                frames[f].append(r.insetBy(dx: -mx - margin.width, dy: -my - margin.height).intersection(bounds))
+                let c = r.insetBy(dx: -mx - margin.width, dy: -my - margin.height).intersection(bounds)
+                guard !c.isNull, !c.isEmpty else { continue }  // moved off the picture
+                frames[f].append(c)
                 anchors[f].append(anchor)
             }
         }
@@ -505,7 +578,7 @@ public struct ScreenText: Sendable {
         }
         // A line that could not be read for a moment (covered by a banner, blurred by motion)
         // continues as a new track, and a line read differently (O90 for 090) is a new track
-        // that may match nothing: a track is continued by the nearest one that starts within
+        // that may match nothing: a track is continued by the first one that starts within
         // `maxGap` at the same place with similar text (with `all`, any text). The parts to
         // hide are shared along each chain of continuations, both ways (the misread one may
         // come first), and the mosaic is kept across the gaps. Filmed screens drop lines for
@@ -541,12 +614,14 @@ public struct ScreenText: Sendable {
                     for q in quads { addCode(q, margin: m, extra: Self.codeGrowth(q, seconds: dt), at: f) }
                     continue
                 }
+                if t.isTilted, let s = t.slantedLines(atFrame: f, times: times, extend: extend(t)),
+                   addSlanted(rels, lines: s.lines, boxes: s.boxes, slack: t.tiltSlack(atFrame: f, times: times),
+                              margin: t.motionMargin(atFrame: f, times: times), at: f) {
+                    continue
+                }
                 if t.isTilted {
-                    guard let boxes = t.lineBoxes(atFrame: f, times: times, extend: extend(t)) else { continue }
-                    let a = t.tilt(atFrame: f, times: times), m = t.motionMargin(atFrame: f, times: times)
-                    for r in boxes where !r.isEmpty {
-                        add(rels, line: r, anchor: CGPoint(x: r.minX.rounded(), y: r.minY.rounded()), margin: m, at: f, tilt: a)
-                    }
+                    guard let line = t.line(atFrame: f, times: times, extend: extend(t), bounds: bounds), !line.rect.isEmpty else { continue }
+                    add([whole], line: line.rect, anchor: line.anchor, margin: t.motionMargin(atFrame: f, times: times), at: f)
                     continue
                 }
                 guard let line = t.line(atFrame: f, times: times, extend: extend(t), bounds: bounds), !line.rect.isEmpty else { continue }
@@ -580,14 +655,13 @@ public struct ScreenText: Sendable {
                             }
                             continue
                         }
-                        // Between the two places, with room growing in over 0.25 s from each end
-                        // (all at once, the mosaic swelled every time a code was missed), and
+                        // Between the two places with all the room from the first frame: a code
+                        // missed while blurred by motion has started moving then (room growing in
+                        // over 0.25 s, tried for a steadier mosaic, left it out of the box), and
                         // also where it was and where it is next, as long as a code is held there.
                         let near = min(times[f] - ta, tb - times[f])
-                        let ramp = CGFloat(min(1, near / 0.25))
                         let q = place(lerpPoints(ea.corners, alignedCorners(eb.corners, to: ea.corners), u), in: lerp(ea.box, eb.box, u))
-                        addCode(q, margin: CGSize(width: gapMargin.width * ramp, height: gapMargin.height * ramp),
-                                extra: Self.codeGrowth(q, seconds: near), at: f)
+                        addCode(q, margin: gapMargin, extra: Self.codeGrowth(q, seconds: near), at: f)
                         for q in t.codeQuads(atFrame: f, times: times, extend: extend(t)) ?? [] {
                             addCode(q, margin: t.motionMargin(atFrame: f, times: times), extra: Self.codeGrowth(q, seconds: times[f] - ta), at: f)
                         }
@@ -597,11 +671,23 @@ public struct ScreenText: Sendable {
                         continue
                     }
                     let r = lerp(ra, rb, u)
-                    // Slanted on both sides: slanted between them, else the whole upright box.
-                    let tilt: CGFloat? = t.isTilted || b.isTilted
-                        ? (t.isTilted && b.isTilted ? t.tilts[t.tilts.count - 1] + (b.tilts[0] - t.tilts[t.tilts.count - 1]) * u : .infinity)
-                        : nil
-                    add(rels, line: r, anchor: CGPoint(x: r.minX.rounded(), y: r.minY.rounded()), margin: gapMargin, code: t.isCode, at: f, tilt: tilt)
+                    let anchor = CGPoint(x: r.minX.rounded(), y: r.minY.rounded())
+                    if t.isTilted || b.isTilted {
+                        // Slanted on both sides: slanted between them, turning from one slant to
+                        // the other (half the turn is added as slack: it need not turn evenly).
+                        // Else the whole upright box.
+                        let a0 = t.isTilted ? t.tilts[t.tilts.count - 1] : 0, a1 = b.isTilted ? b.tilts[0] : 0
+                        if t.isTilted && b.isTilted,
+                           let line = SlantedLine(box: r, angle: a0 + (a1 - a0) * u,
+                                                  height: max(t.lineHeights[t.lineHeights.count - 1], b.lineHeights[0])),
+                           addSlanted(rels, lines: [line], boxes: [r],
+                                      slack: max(t.tiltSlacks[t.tiltSlacks.count - 1], b.tiltSlacks[0]) + abs(a1 - a0) / 2, margin: .zero, at: f) {
+                            continue
+                        }
+                        add([whole], line: r, anchor: anchor, at: f)
+                        continue
+                    }
+                    add(rels, line: r, anchor: anchor, margin: gapMargin, code: t.isCode, at: f)
                 }
             }
         }
@@ -613,7 +699,7 @@ public struct ScreenText: Sendable {
         }
         if cancelled() { return nil }
         return TextMask(
-            frames: frames, anchors: anchors, codes: codes, slanted: slanted, wordHits: wordHits, hidden: hidden, wordLines: wordLineCounts(o.words))
+            frames: frames, anchors: anchors, codes: codes, slanted: slanted, slantedAnchors: slantedAnchors, wordHits: wordHits, hidden: hidden, wordLines: wordLineCounts(o.words))
     }
 
     /// For each word, the number of lines (entries) where it was found in any reading, so the
@@ -652,14 +738,14 @@ public func withText(_ faces: [FrameFaces], text: ScreenText, mask: TextMask) ->
         return text.times.indices.map {
             FrameFaces(
                 time: text.times[$0], mosaic: [], kept: [], exact: mask.frames[$0], exactAnchors: mask.anchors[$0], codes: mask.codes[$0],
-                slanted: mask.slanted[$0])
+                slanted: mask.slanted[$0], slantedAnchors: mask.slantedAnchors[$0])
         }
     }
     return faces.map { f in
         let i = text.frameIndex(at: f.time)
         return FrameFaces(
             time: f.time, mosaic: f.mosaic, kept: f.kept, exact: mask.frames[i], exactAnchors: mask.anchors[i], codes: mask.codes[i], slanted: mask.slanted[i],
-            stickers: f.stickers)
+            slantedAnchors: mask.slantedAnchors[i], stickers: f.stickers)
     }
 }
 
@@ -680,6 +766,7 @@ public func analyzeText(
     // QR codes are followed by their own builder: a code is never matched to a line of text
     // (the words "QRコード" printed next to it, say).
     var codeBuilder = TrackBuilder(size: info.size)
+    codeBuilder.codes = true
     // Codes found only by the closer look (every `deepCodeInterval`) miss the recognitions in
     // between: counted as missed, each would start a new track every time.
     codeBuilder.maxMissed = 2 * Int((deepCodeInterval / interval).rounded(.up)) + 2
@@ -857,7 +944,7 @@ public func analyzeText(
 let deepCodeInterval = 0.5
 
 /// Recognizes the text of one frame and finds its QR codes. With `deep`, QR codes are also
-/// looked for in five overlapping parts of the frame (each 60 % of it) enlarged 2× and
+/// looked for in five overlapping parts of the frame (each 60 % of it) enlarged up to 2× and
 /// sharpened: Vision missed most codes of 100–160 px, slanted or slightly out of focus, in
 /// the whole frame and found them there (synthetic screen filmed at an angle with glare,
 /// 2026-11-16). That costs ~110 ms (1080p, M3 Max), as much as reading the text.
@@ -874,8 +961,9 @@ func recognizeText(_ image: CIImage, frame: Int, time: Double, deep: Bool = fals
         let w = ext.width * 0.6, h = ext.height * 0.6
         for (fx, fy) in [(0.0, 0.0), (0.4, 0.0), (0.0, 0.4), (0.4, 0.4), (0.2, 0.2)] {
             let part = CGRect(x: ext.minX + ext.width * fx, y: ext.minY + ext.height * fy, width: w, height: h).integral
-            // 2×, up to a long side of 2300 px (a 4K part is as large as a 1080p part enlarged).
-            let scale = max(1, min(2, 2300 / max(part.width, part.height)))
+            // 2×, up to a long side of 2304 px (1080p: just 2×; a 4K part is as large as a
+            // 1080p part enlarged, so a 4K code must be about twice as many pixels to be found).
+            let scale = max(1, min(2, 2304 / max(part.width, part.height)))
             let size = CGSize(width: (part.width * scale).rounded(), height: (part.height * scale).rounded())
             let up = image.cropped(to: part)
                 .transformed(by: CGAffineTransform(translationX: -part.minX, y: -part.minY))
@@ -954,18 +1042,53 @@ func slantedBox(_ r: CGRect, angle: CGFloat) -> (center: CGPoint, length: CGFloa
     return (CGPoint(x: r.midX, y: r.midY), length, height)
 }
 
-/// The part `rel` of a slanted line (along it from its start 0 to its end 1; across it from its
-/// bottom 0 to its top 1), with `along` and `across` added on each side: top left, top right,
-/// bottom right, bottom left, as `codeBlocks` draws a quad.
-func slantedQuad(_ r: CGRect, angle: CGFloat, rel: CGRect, along: CGFloat, across: CGFloat) -> [CGPoint]? {
-    guard let b = slantedBox(r, angle: angle) else { return nil }
-    let d = CGPoint(x: cos(angle), y: sin(angle)), n = CGPoint(x: -sin(angle), y: cos(angle))
-    func at(_ u: CGFloat, _ v: CGFloat) -> CGPoint {
-        CGPoint(x: b.center.x + u * d.x + v * n.x, y: b.center.y + u * d.y + v * n.y)
+/// Least slack of a slant (see `TextTrack.tiltSlacks`): readings of a still line differ by
+/// about this much.
+let minTiltSlack = 0.25 * CGFloat.pi / 180
+
+/// A slanted line where it is drawn (pixels, Core Image coordinates).
+struct SlantedLine {
+    let center: CGPoint, angle: CGFloat, length: CGFloat, height: CGFloat
+
+    /// From its upright box (`slantedBox`), with at least `height` (its measured height).
+    init?(box: CGRect, angle: CGFloat, height: CGFloat) {
+        guard let b = slantedBox(box, angle: angle) else { return nil }
+        center = b.center
+        self.angle = angle
+        length = b.length
+        self.height = max(b.height, height)
     }
-    let u0 = (rel.minX - 0.5) * b.length - along, u1 = (rel.maxX - 0.5) * b.length + along
-    let v0 = (rel.minY - 0.5) * b.height - across, v1 = (rel.maxY - 0.5) * b.height + across
-    return [at(u0, v1), at(u1, v1), at(u1, v0), at(u0, v0)]
+
+    var along: CGPoint { CGPoint(x: cos(angle), y: sin(angle)) }
+    var up: CGPoint { CGPoint(x: -sin(angle), y: cos(angle)) }
+    /// `u` along the line and `v` across it (up) from its centre.
+    func point(_ u: CGFloat, _ v: CGFloat) -> CGPoint {
+        CGPoint(x: center.x + u * along.x + v * up.x, y: center.y + u * along.y + v * up.y)
+    }
+    /// Its bottom left corner, which the mosaic blocks line up with.
+    var start: CGPoint { point(-length / 2, -height / 2) }
+
+    /// The part `rel` (along the line from its start 0 to its end 1; across it from its bottom
+    /// 0 to its top 1) of each of `lines` (one line at one slant, where it was and where it
+    /// moved), with `along` and `across` added on each side, as one quad: top left, top right,
+    /// bottom right, bottom left, as `codeBlocks` draws a quad. All of them and what lies
+    /// between them (a line moving from one to the other) are inside. The slant may be off by
+    /// `slack`, turning a point at distance r from the centre by r × `slack` across.
+    static func quad(_ lines: [SlantedLine], rel: CGRect, along: CGFloat, across: CGFloat, slack: CGFloat) -> [CGPoint] {
+        let base = lines[0]
+        var u0 = CGFloat.infinity, u1 = -CGFloat.infinity, v0 = CGFloat.infinity, v1 = -CGFloat.infinity
+        for l in lines {
+            let a0 = (rel.minX - 0.5) * l.length, a1 = (rel.maxX - 0.5) * l.length
+            let turn = max(abs(a0), abs(a1)) * slack
+            let b0 = (rel.minY - 0.5) * l.height - across - turn, b1 = (rel.maxY - 0.5) * l.height + across + turn
+            for p in [l.point(a0 - along, b0), l.point(a1 + along, b0), l.point(a1 + along, b1), l.point(a0 - along, b1)] {
+                let dx = p.x - base.center.x, dy = p.y - base.center.y
+                let u = dx * base.along.x + dy * base.along.y, v = dx * base.up.x + dy * base.up.y
+                u0 = min(u0, u); u1 = max(u1, u); v0 = min(v0, v); v1 = max(v1, v)
+            }
+        }
+        return [base.point(u0, v1), base.point(u1, v1), base.point(u1, v0), base.point(u0, v0)]
+    }
 }
 
 /// `p` lies in the convex quad `q` (on its edge too).
@@ -1094,6 +1217,11 @@ private func differs(_ a: [UInt8], _ b: [UInt8]) -> Bool {
 private struct TrackBuilder {
     let size: CGSize
     var maxMissed = 2
+    /// QR codes: all read the same, so a code is joined only to a track whose last code it
+    /// overlaps (the centre of one inside the other). Two codes side by side, one of them not
+    /// read for a while, were otherwise joined into one track whose mosaic moved to the other
+    /// code and left the first bare; apart, each is continued (`ScreenText.continuations`).
+    var codes = false
     var tracks: [TextTrack] = []
     private var pass = 0
     private var lastPass: [Int] = []  // per track
@@ -1103,16 +1231,24 @@ private struct TrackBuilder {
     /// `pin`: the lines of the last recognition again, at the last frame before the picture
     /// changed. Not a new recognition, so it does not count toward `maxMissed`.
     /// `newSince`: lines not matched to a track have been there since this frame.
-    /// `corners`: for QR codes, each line's `TextSample.corners`.
+    /// `corners`: each line's (or code's) `TextSample.corners`.
     mutating func add(
         frame: Int, lines: [(CGRect, String, VNRecognizedText?)], corners: [[CGPoint]?]? = nil, pin: Bool = false, newSince: Int? = nil
     ) {
         if !pin { pass += 1 }
         let open = tracks.indices.filter { tracks[$0].last < frame && pass - lastPass[$0] <= maxMissed + 1 }
-        let matches = matchLines(
+        let heights = lines.indices.map { l in TextSample(frame: frame, rect: lines[l].0, string: "", text: nil, corners: corners?[l] ?? nil).lineHeight }
+        var matches = matchLines(
             lines.map { ($0.0, $0.1) },
             to: open.map { (tracks[$0].samples.last!.rect, tracks[$0].samples.last!.string, tracks[$0].last) },
-            frame: frame, size: size)
+            frame: frame, size: size,
+            heights: (heights, open.map { tracks[$0].samples.last!.lineHeight }))
+        if codes {
+            matches = matches.filter { l, o in
+                let prev = tracks[open[o]].samples.last!
+                return overlaps(quadOf(lines[l].0, corners?[l] ?? nil), quadOf(prev.rect, prev.corners))
+            }
+        }
         var usedLines = Set<Int>()
         for (l, o) in matches {
             let k = open[o]
@@ -1133,6 +1269,20 @@ private struct TrackBuilder {
     }
 }
 
+/// The quad of a box with corners relative to it (`TextSample.corners`), or the box itself.
+private func quadOf(_ r: CGRect, _ corners: [CGPoint]?) -> [CGPoint] {
+    if let c = corners, c.count == 4 { return place(c, in: r) }
+    return [CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.minX, y: r.minY)]
+}
+
+/// The centre of one quad lies in the other.
+private func overlaps(_ a: [CGPoint], _ b: [CGPoint]) -> Bool {
+    func centre(_ q: [CGPoint]) -> CGPoint {
+        CGPoint(x: q.map(\.x).reduce(0, +) / CGFloat(q.count), y: q.map(\.y).reduce(0, +) / CGFloat(q.count))
+    }
+    return quadContains(a, centre(b)) || quadContains(b, centre(a))
+}
+
 /// Pairs the lines of one recognition with open tracks (line index → track index in
 /// `tracks`): similar text (≥ 0.6) at a similar height, within 35 % of the picture. Pairs of
 /// the same text (≥ 0.95) are made first. A pair of merely similar text must then move like
@@ -1146,14 +1296,15 @@ private struct TrackBuilder {
 /// similar pair is accepted as before.
 func matchLines(
     _ lines: [(rect: CGRect, string: String)], to tracks: [(rect: CGRect, string: String, frame: Int)],
-    frame: Int, size: CGSize
+    frame: Int, size: CGSize, heights: (lines: [CGFloat], tracks: [CGFloat])? = nil
 ) -> [(line: Int, track: Int)] {
     let lineKeys = lines.map { normalizedForMatch($0.string) }
     let trackKeys = tracks.map { normalizedForMatch($0.string) }
     var pairs: [(cost: Double, sim: Double, line: Int, track: Int)] = []
     for (l, line) in lines.enumerated() {
         for (k, prev) in tracks.enumerated() {
-            let ratio = line.rect.height / max(prev.rect.height, 1)
+            // The lines' own heights where known (`TextSample.lineHeight`), else their boxes.
+            let ratio = heights.map { $0.lines[l] / max($0.tracks[k], 1) } ?? line.rect.height / max(prev.rect.height, 1)
             guard ratio > 0.6 && ratio < 1.6 else { continue }
             let dx = abs(line.rect.midX - prev.rect.midX) / size.width
             let dy = abs(line.rect.midY - prev.rect.midY) / size.height
@@ -1352,6 +1503,19 @@ private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend:
         guard let ra = a.rect(atFrame: f, times: times, extend: extend, bounds: bounds),
               let rb = b.rect(atFrame: f, times: times, extend: extend, bounds: bounds)
         else { continue }
+        if a.isTilted || b.isTilted {
+            // On a slanted screen the upright boxes of neighbouring lines overlap, so the line
+            // under an upright box was often another line beside it: compare along the slant.
+            let angle = a.isTilted ? a.tilt(atFrame: f, times: times) : b.tilt(atFrame: f, times: times)
+            if let sa = slantedBox(ra, angle: angle), let sb = slantedBox(rb, angle: angle) {
+                if isNextLine(length: sa.length, height: sa.height, below: sb.center.minus(sa.center), angle: angle,
+                              length: sb.length, height: sb.height) { return true }
+                // Both slanted: the upright boxes say nothing. One upright line (too short to
+                // measure, e.g. "402号"): either way, rather than leave it.
+                if a.isTilted && b.isTilted { continue }
+            }
+            // No slanted line from the box (cut at the picture's edge): upright, as before.
+        }
         let h = ra.height
         let gap = ra.minY - rb.maxY  // Core Image coordinates: y grows upward
         let column = rb.maxX > ra.minX - 1.5 * h && rb.minX < ra.maxX + 1.5 * h
@@ -1360,6 +1524,22 @@ private func isLine(_ b: TextTrack, below a: TextTrack, times: [Double], extend:
         }
     }
     return false
+}
+
+/// `isLine(below:)` in the frame of a line slanted by `angle`: `offset` from its centre to the
+/// centre of the other line, which is the next line if just under it (across) and in the same
+/// column (along), with about the same height.
+func isNextLine(length la: CGFloat, height h: CGFloat, below offset: CGPoint, angle: CGFloat,
+                length lb: CGFloat, height hb: CGFloat) -> Bool {
+    let u = offset.x * cos(angle) + offset.y * sin(angle)   // along the line
+    let v = -offset.x * sin(angle) + offset.y * cos(angle)  // across it, up
+    let gap = -v - (h + hb) / 2
+    let column = u + lb / 2 > -la / 2 - 1.5 * h && u - lb / 2 < la / 2 + 1.5 * h
+    return gap > -0.3 * h && gap < 0.8 * h && column && hb > 0.7 * h && hb < 1.4 * h
+}
+
+private extension CGPoint {
+    func minus(_ p: CGPoint) -> CGPoint { CGPoint(x: x - p.x, y: y - p.y) }
 }
 
 private let whole = CGRect(x: 0, y: 0, width: 1, height: 1)
@@ -1776,6 +1956,8 @@ func selfCheckMask() -> [String] {
     expect(qm.codes[20].contains { abs(boundingBox($0).midX - 500) < 30 }, "code: across a gap it moves between the places")
     // Without a cut, also held where it was and where it is next (as long as a code is held).
     expect(qm.codes[12].contains { q in truth.allSatisfy { contains(q, $0) } }, "code: across a gap, also held at its place")
+    expect(qm.codes[12].contains { q in rotated(CGPoint(x: 500, y: 500), side: 100, degrees: 30).allSatisfy { contains(q, $0) } },
+           "code: across a gap, the room is there from the first frame (it may have moved at once)")
     // Across a cut it jumps: at its old place before, at the new one after.
     let qc = codeScreen([qa, qb], cuts: [20]).mask(qo)
     expect(qc.codes[19].allSatisfy { boundingBox($0).midX < 400 } && !qc.codes[19].isEmpty, "code: before a cut, at its old place")
@@ -1873,5 +2055,101 @@ func selfCheckMask() -> [String] {
     let em = screen([et]).mask(numbers)
     expect(em.slanted[15].isEmpty && em.frames[15].count == 1 && (em.frames[15].first?.width ?? 0) >= edgeBox.width,
            "slanted: at the picture's edge the whole upright box is hidden")
+    // The line under a slanted address is found along the slant: the short next line (its
+    // upright box is lower than the address's) is hidden, a line far under it whose upright
+    // box touches the address's is not.
+    func slantedText(_ id: Int, at c: CGPoint, length: CGFloat, _ text: String) -> TextTrack {
+        var t = TextTrack(id: id, samples: [0, 15, 30].map { f in
+            let q = slantedLine(c, length: length, height: 24, degrees: 20), box = boundingBox(q)
+            let rel = q.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) }
+            return TextSample(frame: f, rect: box, string: text, text: nil, corners: rel)
+        })
+        t.text = text
+        t.measureTilt(times: times)
+        return t
+    }
+    let a20 = 20 * CGFloat.pi / 180
+    var slantedAddress = [
+        slantedText(0, at: CGPoint(x: 500, y: 500), length: 400, "東京都みほん区サンプル町1-2-3"),
+        slantedText(1, at: CGPoint(x: 500 + 31.2 * sin(a20) - 100 * cos(a20), y: 500 - 31.2 * cos(a20) - 100 * sin(a20)),
+                    length: 200, "ハイツ402です"),
+        slantedText(2, at: CGPoint(x: 500, y: 350), length: 400, "はい、大丈夫です"),
+    ]
+    slantedAddress[0].parts = [.address: [whole]]
+    addContinuations(&slantedAddress, times: times, extend: 0.35, bounds: bounds, size: size)
+    expect(slantedAddress.allSatisfy(\.isTilted), "slanted: the address lines are slanted")
+    expect(slantedAddress[1].parts[.address] != nil, "slanted: the short line under a slanted address is hidden")
+    expect(slantedAddress[2].parts[.address] == nil, "slanted: a line far under a slanted address is kept")
+
+    // A slanted line moving fast across itself, then lost: where it was, where its motion
+    // takes it and everything between are hidden (two separate boxes left the middle bare).
+    func slantedSamples(_ frames: [(Int, CGPoint)], length: CGFloat = 400, degrees: CGFloat = 20, readAt: CGFloat? = nil) -> TextTrack {
+        var t = TextTrack(id: 0, samples: frames.map { f, c in
+            let q = slantedLine(c, length: length, height: 24, degrees: degrees), box = boundingBox(q)
+            let read = slantedLine(c, length: length, height: 24, degrees: readAt ?? degrees)
+            let rel = read.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) }
+            return TextSample(frame: f, rect: box, string: "電話 090-0000-1111", text: nil, corners: rel)
+        })
+        t.text = "電話 090-0000-1111"
+        t.measureTilt(times: times)
+        t.parts = [.number: [whole]]
+        t.makeSteady(times: times)
+        return t
+    }
+    let down = CGPoint(x: 60 * sin(a20), y: -60 * cos(a20))  // across the line, 60 px per 0.1 s
+    func across(_ k: CGFloat) -> CGPoint { CGPoint(x: 500 + k * down.x, y: 500 + k * down.y) }
+    let moving = slantedSamples([(0, across(0)), (3, across(1)), (6, across(2))])
+    let movingMask = screen([moving]).mask(numbers)
+    for (f, k) in [(7, 2.33), (9, 3.0)] as [(Int, CGFloat)] {
+        let between = stride(from: 2, through: k, by: 0.25).map { across($0) }
+        expect(movingMask.slanted[f].count == 1 && between.allSatisfy { p in movingMask.slanted[f].contains { contains($0, p) } },
+               "slanted: after the last reading, from where it was to where it moves is hidden (frame \(f))")
+    }
+    // The slant read 0.6° too steep: the height found from the box shrinks by about a third,
+    // and the ends of the long line turn 4 px off its axis; the measured height and the slack
+    // of the slant keep them in.
+    let steep = slantedSamples([(0, CGPoint(x: 500, y: 500)), (15, CGPoint(x: 500, y: 500)), (30, CGPoint(x: 500, y: 500))],
+                               length: 800, readAt: 20.6)
+    let steepMask = screen([steep]).mask(numbers)
+    let trueLine = slantedLine(CGPoint(x: 500, y: 500), length: 800, height: 24, degrees: 20)
+    expect(steep.isTilted && steepMask.slanted[15].count == 1 && trueLine.allSatisfy { p in steepMask.slanted[15].contains { contains($0, p) } },
+           "slanted: a slant read a little off still holds the whole line")
+    // Blocks line up with where the line starts, not with the room around it (which changes as
+    // the line moves): with more room, the blocks inside are the same.
+    let noise = CIFilter(name: "CIRandomGenerator")!.outputImage!.cropped(to: CGRect(x: 0, y: 0, width: 400, height: 400))
+    let lineAt = SlantedLine(box: boundingBox(slantedLine(CGPoint(x: 200, y: 200), length: 240, height: 24, degrees: 20)), angle: a20, height: 24)!
+    func drawnBlocks(room: CGFloat) -> [UInt8] {
+        let q = SlantedLine.quad([lineAt], rel: whole, along: room, across: room, slack: 0)
+        var px = [UInt8](repeating: 0, count: 400 * 400 * 4)
+        CIContext().render(slantedBlocks(noise, over: noise, quads: [q], anchors: [lineAt.start], block: 10), toBitmap: &px, rowBytes: 1600,
+                           bounds: CGRect(x: 0, y: 0, width: 400, height: 400), format: .RGBA8, colorSpace: nil)
+        return px
+    }
+    let tight = drawnBlocks(room: 4), roomy = drawnBlocks(room: 13)
+    let inside = stride(from: -100, through: 100, by: 7).map { lineAt.point(CGFloat($0), 0) }
+    let differing = inside.filter { p in
+        let i = ((399 - Int(p.y)) * 400 + Int(p.x)) * 4
+        return abs(Int(tight[i]) - Int(roomy[i])) > 2
+    }
+    expect(differing.isEmpty, "slanted: the blocks do not change with the room around the line (\(differing.count) of \(inside.count) differ)")
+    // Lines matched by their own heights: on a slanted line read in part the box is far lower.
+    let fullLine = boundingBox(slantedLine(CGPoint(x: 500, y: 500), length: 600, height: 24, degrees: 20))
+    let partLine = boundingBox(slantedLine(CGPoint(x: 400, y: 464), length: 300, height: 24, degrees: 20))
+    expect(matchLines([(partLine, "電話 090-0000-1111")], to: [(fullLine, "電話 090-0000-1111 です", 0)], frame: 3, size: size,
+                      heights: ([24], [24])).count == 1, "slanted: a line read in part is matched by its own height")
+    // QR codes side by side, one read alone for a while: the other's track does not take it.
+    var codeTracks = TrackBuilder(size: size)
+    codeTracks.codes = true
+    codeTracks.maxMissed = 12
+    func codeLine(_ c: CGPoint) -> (CGRect, [CGPoint]) {
+        let q = rotated(c, side: 100, degrees: 30), box = boundingBox(q)
+        return (box, q.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) })
+    }
+    for (f, c) in [(0, CGPoint(x: 300, y: 500)), (15, CGPoint(x: 450, y: 500)), (30, CGPoint(x: 300, y: 500))] {
+        let (box, rel) = codeLine(c)
+        codeTracks.add(frame: f, lines: [(box, codeText, nil)], corners: [rel])
+    }
+    expect(codeTracks.tracks.allSatisfy { t in Set(t.samples.map { $0.rect.midX.rounded() }).count == 1 },
+           "code: a track does not move to the code beside it (\(codeTracks.tracks.map { $0.samples.map { Int($0.rect.midX) } }))")
     return failures
 }

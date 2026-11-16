@@ -24,11 +24,13 @@ public struct FrameFaces: Sendable {
     public let codes: [[CGPoint]]
     /// Slanted lines of on-screen text to mosaic along their corners (see `TextMask.slanted`).
     public let slanted: [[CGPoint]]
+    /// For each of `slanted`, where its line starts (see `TextMask.slantedAnchors`).
+    public let slantedAnchors: [CGPoint]
     /// Faces covered by a person's sticker instead of the mosaic (not in `mosaic`).
     public let stickers: [StickerBox]
     public init(
         time: Double, mosaic: [CGRect], kept: [CGRect], exact: [CGRect] = [], exactAnchors: [CGPoint] = [],
-        codes: [[CGPoint]] = [], slanted: [[CGPoint]] = [], stickers: [StickerBox] = []
+        codes: [[CGPoint]] = [], slanted: [[CGPoint]] = [], slantedAnchors: [CGPoint] = [], stickers: [StickerBox] = []
     ) {
         self.time = time
         self.mosaic = mosaic
@@ -37,6 +39,7 @@ public struct FrameFaces: Sendable {
         self.exactAnchors = exactAnchors
         self.codes = codes
         self.slanted = slanted
+        self.slantedAnchors = slantedAnchors
         self.stickers = stickers
     }
 

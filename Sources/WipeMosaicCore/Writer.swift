@@ -203,7 +203,7 @@ public func writeMosaic(
                         CVBufferPropagateAttachments(src, dst)
                         let up = uprightImage(src, info)
                         let mosaicked = applyCover(
-                            up, rects: rects, text: text.rects, textAnchors: text.anchors, codes: text.codes, slanted: text.slanted,
+                            up, rects: rects, text: text.rects, textAnchors: text.anchors, codes: text.codes, slanted: text.slanted, slantedAnchors: text.slantedAnchors,
                             stickers: stickers, render: render,
                             block: block)
                         let raw = info.orientation == .up ? mosaicked : mosaicked.oriented(inverse(info.orientation))

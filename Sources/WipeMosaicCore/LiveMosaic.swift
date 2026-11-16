@@ -31,13 +31,14 @@ public final class LiveMosaic: @unchecked Sendable {
             let rects = enabled
                 ? index.faceRects(at: t, hold: render.hold, pad: render.pad).map { $0.offsetBy(dx: origin.x, dy: origin.y) }
                 : []
-            var text: [CGRect] = [], textAnchors: [CGPoint] = [], codes: [[CGPoint]] = [], slanted: [[CGPoint]] = []
+            var text: [CGRect] = [], textAnchors: [CGPoint] = [], codes: [[CGPoint]] = [], slanted: [[CGPoint]] = [], slantedAnchors: [CGPoint] = []
             if enabled {
                 let exact = index.exactRects(at: t)
                 text = exact.rects.map { $0.offsetBy(dx: origin.x, dy: origin.y) }
                 textAnchors = exact.anchors.map { CGPoint(x: $0.x + origin.x, y: $0.y + origin.y) }
                 codes = exact.codes.map { $0.map { CGPoint(x: $0.x + origin.x, y: $0.y + origin.y) } }
                 slanted = exact.slanted.map { $0.map { CGPoint(x: $0.x + origin.x, y: $0.y + origin.y) } }
+                slantedAnchors = exact.slantedAnchors.map { CGPoint(x: $0.x + origin.x, y: $0.y + origin.y) }
             }
             let stickers = enabled
                 ? index.stickerBoxes(at: t).map { $0.offsetBy(dx: origin.x, dy: origin.y) }
@@ -47,7 +48,7 @@ public final class LiveMosaic: @unchecked Sendable {
                 return
             }
             let out = applyCover(
-                source, rects: rects, text: text, textAnchors: textAnchors, codes: codes, slanted: slanted, stickers: stickers, render: render,
+                source, rects: rects, text: text, textAnchors: textAnchors, codes: codes, slanted: slanted, slantedAnchors: slantedAnchors, stickers: stickers, render: render,
                 block: render.blockSize(for: source.extent.size))
             request.finish(with: out, context: nil)
         }

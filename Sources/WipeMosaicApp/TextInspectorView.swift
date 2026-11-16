@@ -361,9 +361,12 @@ private struct TextLineRow: View {
                 .toggleStyle(.checkbox)
                 .labelsHidden()
                 .disabled(video.textAll || auto)
-                .help(auto ? "種類「QRコード」がオンなので、自動で隠しています"
+                .help(auto ? autoHelp
                       : isCode ? (whole ? "押すと、このQRコードを隠すのをやめます" : "押すと、このQRコードを隠します")
                       : whole ? "押すと、行全体を隠すのをやめます" : "押すと、行全体を隠します")
+                // The row's button reads the same text: say what the checkbox does.
+                .accessibilityLabel(isCode ? "\(entry.text)を隠す" : "\(entry.text)の行全体を隠す")
+                .accessibilityHint(auto ? autoHelp : "")
             Button {
                 model.seek(to: text.times[entry.firstFrame])
             } label: {
@@ -374,7 +377,7 @@ private struct TextLineRow: View {
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                     } icon: {
-                        if isCode { Image(systemName: "qrcode") }
+                        if isCode { Image(systemName: "qrcode").accessibilityHidden(true) }
                     }
                     .labelStyle(TitleAndOptionalIcon(showsIcon: isCode))
                     // The state on one line and the time at the end, so no row wraps the time
@@ -403,14 +406,17 @@ private struct TextLineRow: View {
                 .foregroundStyle(.secondary)  // a state mark, not a button
                 .opacity(whole || partly ? 1 : 0)
                 .help(isCode ? (whole || partly ? "QRコードを隠しています" : "") : whole ? "行全体を隠しています" : partly ? "一部を隠しています" : "")
-                .accessibilityLabel(isCode || whole ? "隠しています" : "一部を隠しています")
-                .accessibilityHidden(!(whole || partly))
+                .accessibilityHidden(true)  // the caption says the same
         }
         .padding(.vertical, 2)
     }
 
+    private var autoHelp: String {
+        "上の「自動で隠すもの」の「QRコード」がオンなので、自動で隠しています。この1つだけ外すことはできません（オフにすると、ほかの動画でも自動では隠れません）"
+    }
+
     private func caption(whole: Bool, partly: Bool) -> String {
-        if isCode { return whole ? "隠す" : partly ? "自動で隠す" : "隠していません" }
+        if isCode { return whole ? "隠す" : partly ? "自動で隠す（種類がオン）" : "隠していません" }
         if whole { return "行全体を隠す" }
         if partly {
             var why = entry.kinds.filter { model.textKinds.contains($0) }.sorted { $0.rawValue < $1.rawValue }.map(\.shortLabel)
