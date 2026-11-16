@@ -281,7 +281,12 @@ struct ViewerView: View {
                 quad.closeSubpath()
                 return path.union(quad)
             }
-            outline.stroke(Color.orange, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+            // A dark line under the orange one, so the outline also shows on white (a QR code,
+            // a light screen).
+            ZStack {
+                outline.stroke(Color.black.opacity(0.45), style: StrokeStyle(lineWidth: 3, lineJoin: .round))
+                outline.stroke(Color.orange, style: StrokeStyle(lineWidth: 1.5, lineJoin: .round, dash: [5, 3]))
+            }
         }
         .clipped()
         .allowsHitTesting(false)
@@ -468,7 +473,7 @@ private struct TransportBar: View {
             } label: {
                 Label("1コマ戻る", systemImage: "backward.frame.fill").labelStyle(.iconOnly)
             }
-            .help("1コマ戻る（←。⇧← で 1 秒戻る）")
+            .help("1コマ戻る（←。⇧←で1秒戻る）")
             Button {
                 model.togglePlay()
             } label: {
@@ -482,7 +487,7 @@ private struct TransportBar: View {
             } label: {
                 Label("1コマ進む", systemImage: "forward.frame.fill").labelStyle(.iconOnly)
             }
-            .help("1コマ進む（→。⇧→ で 1 秒進む）")
+            .help("1コマ進む（→。⇧→で1秒進む）")
             Timeline(model: model, video: video, duration: duration)
                 .frame(minWidth: 140)
             if time { timeLabel }

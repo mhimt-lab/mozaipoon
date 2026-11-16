@@ -237,14 +237,14 @@ func listText(input: URL, options: TextMaskOptions, list: Bool) async throws {
     print(String(format: "text: %d lines (%d tracks), %d frames, recognized %d frames, %.1fs", text.entries.count,
                  text.tracks.count, text.times.count, recognized, elapsed))
     for k in TextKind.allCases {
-        // QR codes are one entry: counted by the places they were found at.
-        if k == .qr { print("  qr: \(counted(text.codePlaces, "place"))"); continue }
-        print("  \(k.rawValue): \(counted(text.entries.filter { $0.kinds.contains(k) }.count, "line"))")
+        // A QR code is no line: one entry per place it was found at.
+        print("  \(k.rawValue): \(counted(text.entries.filter { $0.kinds.contains(k) }.count, k == .qr ? "place" : "line"))")
     }
-    // QR codes are one entry: counted by place, not as a line.
-    let codeID = text.codeEntryID
-    let codes = codeID.map { mask.hidden.contains($0) } == true ? ", QR codes at \(counted(text.codePlaces, "place"))" : ""
-    print("  hidden with these options: \(counted(mask.hidden.filter { $0 != codeID }.count, "line"))\(codes), word hits: \(mask.wordHits.count)")
+    // QR codes are counted by place, not as lines.
+    let codeIDs = text.codeEntryIDs
+    let hiddenCodes = mask.hidden.intersection(codeIDs).count
+    let codes = hiddenCodes > 0 ? ", QR codes at \(counted(hiddenCodes, "place"))" : ""
+    print("  hidden with these options: \(counted(mask.hidden.subtracting(codeIDs).count, "line"))\(codes), word hits: \(mask.wordHits.count)")
     print("  frames with hidden text: \(zip(mask.frames, mask.codes).filter { !$0.isEmpty || !$1.isEmpty }.count)")
     guard list else { return }
     for e in text.entries {

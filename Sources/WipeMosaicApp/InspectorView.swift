@@ -463,7 +463,7 @@ struct ExportSection: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .help("\(s.output.path)\n\(s.format.description)・\(s.mosaicFrames)/\(s.frames)コマで隠す・\(formatSeconds(s.elapsed))")
+                        .help("\(s.output.path)\n\(s.format.description)・全\(s.frames)コマ中\(s.mosaicFrames)コマで隠す・\(formatSeconds(s.elapsed))")
                 }
             } icon: {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
@@ -529,7 +529,7 @@ struct ExportSection: View {
                         .help("書き出した動画のこの場面を表示")
                     }
                     if s.dips.count > Self.dipsShown {
-                        Text("ほか \(s.dips.count - Self.dipsShown) か所（再生バーの▼、再生 ▸ 次の確かめてほしい場面）")
+                        Text("ほか\(s.dips.count - Self.dipsShown)か所（再生バーの▼、再生 ▸ 次の確かめてほしい場面）")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)

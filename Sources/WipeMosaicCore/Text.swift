@@ -87,11 +87,17 @@ public struct TextTrack: Sendable {
             return (CGRect(x: x0.value, y: y0.value, width: x1.value - x0.value, height: y1.value - y0.value), slack)
         }
         guard isCode, samples.allSatisfy({ $0.corners?.count == 4 }) else { return }
+        // Vision names the corners after the code's own top left: turned by a quarter, read
+        // mirrored or as another code, the same corner comes under another name, and averaging
+        // or interpolating by name would shrink the quad. Each reading is matched to the one
+        // before it first.
+        var aligned = [samples[0].corners!]
+        for k in samples.indices.dropFirst() { aligned.append(alignedCorners(samples[k].corners!, to: aligned[k - 1])) }
         steadyCorners = samples.indices.map { k in
             let near = samples.indices.filter { abs(ts[$0] - ts[k]) <= window + 1e-6 }
             return (0..<4).map { c in
-                CGPoint(x: near.reduce(0) { $0 + samples[$1].corners![c].x } / CGFloat(near.count),
-                        y: near.reduce(0) { $0 + samples[$1].corners![c].y } / CGFloat(near.count))
+                CGPoint(x: near.reduce(0) { $0 + aligned[$1][c].x } / CGFloat(near.count),
+                        y: near.reduce(0) { $0 + aligned[$1][c].y } / CGFloat(near.count))
             }
         }
     }
@@ -99,8 +105,10 @@ public struct TextTrack: Sendable {
     /// A code's corners at frame `f` (pixels), as `line` places its box: interpolated between
     /// recognized frames, and before the first and after the last one both where it was last
     /// seen and where its motion takes it (the box `line` gives there is the union of the two,
-    /// which would stretch the code). Nil for text and outside the frames `line` covers.
-    func codeQuads(atFrame f: Int, times: [Double], extend: Double) -> [[CGPoint]]? {
+    /// which would stretch the code). Across a cut between two recognized frames the code
+    /// jumps instead: where it was before the cut, where it is after. Nil for text and outside
+    /// the frames `line` covers.
+    func codeQuads(atFrame f: Int, times: [Double], extend: Double, cuts: [Int] = []) -> [[CGPoint]]? {
         guard isCode, steadyCorners.count == samples.count else { return nil }
         let t = times[f]
         if f < first || f > last {
@@ -114,6 +122,10 @@ public struct TextTrack: Sendable {
         }
         let lo = sampleIndex(atOrAfter: f)
         guard samples[lo].frame != f, lo > 0 else { return [place(steadyCorners[lo], in: box(lo))] }
+        if let c = cuts.first(where: { $0 > samples[lo - 1].frame && $0 <= samples[lo].frame }) {
+            let k = f < c ? lo - 1 : lo
+            return [place(steadyCorners[k], in: box(k))]
+        }
         let u = CGFloat((t - times[samples[lo - 1].frame]) / max(times[samples[lo].frame] - times[samples[lo - 1].frame], 1e-6))
         return [place(lerpPoints(steadyCorners[lo - 1], steadyCorners[lo], u), in: lerp(box(lo - 1), box(lo), u))]
     }
@@ -304,11 +316,19 @@ public struct ScreenText: Sendable {
         return min(lo, t.first)...max(hi, t.last)
     }
 
-    /// Track id → the track that continues it: the nearest one that starts within `maxGap`
-    /// (6 s with `all` and for a QR code, else 3 s) at the same place (centres less than 1.5
-    /// line heights apart, 3 sides of a code), of a similar height, with similar text (any text
-    /// with `all`). A code only continues a code. Nil when cancelled.
+    /// Track id → the track that continues it: one that starts within `maxGap` (6 s with
+    /// `all` and for a QR code, else 3 s) at the same place (centres less than 1.5 line heights
+    /// apart, 3 box heights for a code), of a similar height, with similar text (any text with
+    /// `all`). For a line the first to start; for a code the nearest, since two codes side by
+    /// side are often read by turns (the first to start was then the other code, and the quad
+    /// moved off this one). A code only continues a code. Nil when cancelled.
     func continuations(of tracks: [TextTrack], all: Bool, cancelled: () -> Bool = { false }) -> [Int: TextTrack]? {
+        Self.continuations(of: tracks, times: times, all: all, cancelled: cancelled)
+    }
+
+    static func continuations(
+        of tracks: [TextTrack], times: [Double], all: Bool, cancelled: () -> Bool = { false }
+    ) -> [Int: TextTrack]? {
         let maxGap = all ? 6.0 : 3.0, maxCodeGap = 6.0
         let byStart = tracks.sorted { $0.first < $1.first }
         let starts = byStart.map(\.first)
@@ -318,32 +338,31 @@ public struct ScreenText: Sendable {
             let ra = a.samples[a.samples.count - 1].rect
             let ta = times[a.last]
             var k = starts.partitionIndex { $0 > a.last }
+            var nearest: (track: TextTrack, distance: CGFloat)?
             while k < byStart.count, times[byStart[k].first] - ta <= (a.isCode ? maxCodeGap : maxGap) {
                 let b = byStart[k]
                 k += 1
                 let rb = b.samples[0].rect
+                let d = hypot(ra.midX - rb.midX, ra.midY - rb.midY)
                 guard a.isCode == b.isCode,
-                      hypot(ra.midX - rb.midX, ra.midY - rb.midY) < (a.isCode ? 3 : 1.5) * max(ra.height, rb.height),
+                      d < (a.isCode ? 3 : 1.5) * max(ra.height, rb.height),
                       rb.height > 0.6 * ra.height, rb.height < 1.6 * ra.height,
                       all || similarity(normalizedForMatch(a.text), normalizedForMatch(b.text)) >= 0.6
                 else { continue }
-                next[a.id] = b
-                break  // the nearest continuation is enough
+                if !a.isCode {
+                    nearest = (b, d)
+                    break  // the first continuation is enough
+                }
+                if nearest.map({ d < $0.distance }) ?? true { nearest = (b, d) }
             }
+            if let n = nearest { next[a.id] = n.track }
         }
         return next
     }
 
-    /// The entry that lists the QR codes (all codes are one entry); nil without codes.
-    public var codeEntryID: Int? { entries.first { $0.kinds.contains(.qr) }?.id }
-
-    /// How many places QR codes were found at: a code and the codes that continue it (found
-    /// again after it could not be read) count once.
-    public var codePlaces: Int {
-        let codes = tracks.filter(\.isCode)
-        let next = continuations(of: codes, all: false) ?? [:]
-        return codes.count - next.count
-    }
+    /// The entries of QR codes: one per place a code was found at (a code and the codes that
+    /// continue it, found again after it could not be read).
+    public var codeEntryIDs: Set<Int> { Set(entries.filter { $0.kinds.contains(.qr) }.map(\.id)) }
 
     /// Boxes to mosaic for the options.
     public func mask(_ o: TextMaskOptions) -> TextMask { makeMask(o, cancellable: false)! }
@@ -379,7 +398,11 @@ public struct ScreenText: Sendable {
         // A code is hidden whole, with its blank border (a tenth of its side for a small code)
         // and the room for motion around it.
         func addCode(_ q: [CGPoint], margin: CGSize, extra: CGFloat = 0, at f: Int) {
-            codes[f].append(outset(q, by: 0.1 * sqrt(abs(signedArea(q))) + max(margin.width, margin.height) + extra))
+            // A quad that is not convex (corners out of order) is hidden by its box.
+            let b = boundingBox(q)
+            let quad = isDrawableQuad(q) ? q : [CGPoint(x: b.minX, y: b.maxY), CGPoint(x: b.maxX, y: b.maxY),
+                                                 CGPoint(x: b.maxX, y: b.minY), CGPoint(x: b.minX, y: b.minY)]
+            codes[f].append(outset(quad, by: 0.1 * sqrt(max(abs(signedArea(quad)), b.width * b.height / 2)) + max(margin.width, margin.height) + extra))
         }
         for t in tracks {
             if cancelled() { return nil }
@@ -427,7 +450,7 @@ public struct ScreenText: Sendable {
             hidden.insert(owner[t.id] ?? 0)
             for f in frameRange(t) {
                 if t.isCode, (f > t.last && next[t.id] != nil) || (f < t.first && continued.contains(t.id)) { continue }
-                if let quads = t.codeQuads(atFrame: f, times: times, extend: extend(t)) {
+                if let quads = t.codeQuads(atFrame: f, times: times, extend: extend(t), cuts: cuts) {
                     let m = t.motionMargin(atFrame: f, times: times)
                     let dt = f < t.first ? times[t.first] - times[f] : times[f] - times[t.last]
                     for q in quads { addCode(q, margin: m, extra: Self.codeGrowth(q, seconds: dt), at: f) }
@@ -440,7 +463,8 @@ public struct ScreenText: Sendable {
                 let ra = t.samples[t.samples.count - 1].rect, rb = b.samples[0].rect
                 let ta = times[t.last], tb = times[b.first]
                 // A code moves with the camera meanwhile, not at a steady speed: half the
-                // distance between the two places is added around it.
+                // distance between the two places, across or down (the larger for a code), is
+                // added around it.
                 let gapMargin = t.isCode ? CGSize(width: abs(rb.midX - ra.midX) / 2, height: abs(rb.midY - ra.midY) / 2) : .zero
                 let ends = t.codeEnd(last: true).flatMap { a in b.codeEnd(last: false).map { (a, $0) } }
                 // Across a cut the code jumps: before it, it is where it was last seen, after it
@@ -463,8 +487,20 @@ public struct ScreenText: Sendable {
                             }
                             continue
                         }
-                        let q = place(lerpPoints(ea.corners, eb.corners, u), in: lerp(ea.box, eb.box, u))
-                        addCode(q, margin: gapMargin, extra: Self.codeGrowth(q, seconds: min(times[f] - ta, tb - times[f])), at: f)
+                        // Between the two places, with room growing in over 0.25 s from each end
+                        // (all at once, the mosaic swelled every time a code was missed), and
+                        // also where it was and where it is next, as long as a code is held there.
+                        let near = min(times[f] - ta, tb - times[f])
+                        let ramp = CGFloat(min(1, near / 0.25))
+                        let q = place(lerpPoints(ea.corners, alignedCorners(eb.corners, to: ea.corners), u), in: lerp(ea.box, eb.box, u))
+                        addCode(q, margin: CGSize(width: gapMargin.width * ramp, height: gapMargin.height * ramp),
+                                extra: Self.codeGrowth(q, seconds: near), at: f)
+                        for q in t.codeQuads(atFrame: f, times: times, extend: extend(t)) ?? [] {
+                            addCode(q, margin: t.motionMargin(atFrame: f, times: times), extra: Self.codeGrowth(q, seconds: times[f] - ta), at: f)
+                        }
+                        for q in b.codeQuads(atFrame: f, times: times, extend: extend(b)) ?? [] {
+                            addCode(q, margin: b.motionMargin(atFrame: f, times: times), extra: Self.codeGrowth(q, seconds: tb - times[f]), at: f)
+                        }
                         continue
                     }
                     let r = lerp(ra, rb, u)
@@ -545,6 +581,9 @@ public func analyzeText(
     // QR codes are followed by their own builder: a code is never matched to a line of text
     // (the words "QRコード" printed next to it, say).
     var codeBuilder = TrackBuilder(size: info.size)
+    // Codes found only by the closer look (every `deepCodeInterval`) miss the recognitions in
+    // between: counted as missed, each would start a new track every time.
+    codeBuilder.maxMissed = 2 * Int((deepCodeInterval / interval).rounded(.up)) + 2
     var times: [Double] = []
     let ctx = CIContext(options: [.cacheIntermediates: false])
     var lastRecognized = Int.min / 2
@@ -556,6 +595,7 @@ public func analyzeText(
     var lastDeep = -Double.infinity  // time of the last recognition that also looked for small QR codes
     var prevThumb: [UInt8]?  // of the previous frame
     var cuts: [Int] = []
+    var pendingCut: Int?  // a change at once, a cut if the next frame looks like it
 
     var pool: TextWorkerPool?
     if workers > 1, let exe = Bundle.main.executableURL {
@@ -613,7 +653,13 @@ public func analyzeText(
     try forEachFrame(asset: asset, info: info) { i, t, image in
         times.append(t)
         let thumb = thumbnail(image, ctx)
-        if let p = prevThumb, isCut(p, thumb) { cuts.append(i) }
+        // A cut is a change at once that then holds: the frame after it looks like it. A fast
+        // pan or shaking camera changes every frame and is not a cut (a code moves on there).
+        if let c = pendingCut {
+            if let p = prevThumb, !isCut(p, thumb) { cuts.append(c) }
+            pendingCut = nil
+        }
+        if let p = prevThumb, isCut(p, thumb) { pendingCut = i }
         prevThumb = thumb
         let unchanged = lastThumb.map { !differs($0, thumb) } ?? false
         if unchanged, t - lastTime < recheck {
@@ -643,6 +689,7 @@ public func analyzeText(
         progress(done(decoded: i + 1))
     }
     if let u = unchangedUntil, u > lastRecognized { steps.append(.pin(u)) }
+    if let c = pendingCut { cuts.append(c) }  // at the last frame: nothing after it to differ
     pool?.finish()
     while applied < steps.count {
         _ = try step(blocking: true)
@@ -664,19 +711,38 @@ public func analyzeText(
         tracks.append(t)
     }
     for k in tracks.indices { tracks[k].makeSteady(times: times) }
-    // One entry per distinct text, in order of first appearance (all QR codes in one entry,
-    // never with a line that reads "QRコード").
+    // One entry per distinct text, in order of first appearance; one per place for QR codes
+    // (a code and the codes that continue it), never with a line that reads "QRコード".
+    let codeTracks = tracks.filter(\.isCode)
+    var codePlace: [Int: Int] = [:]  // code track id → id of the first track of its place
+    for (a, b) in ScreenText.continuations(of: codeTracks, times: times, all: false) ?? [:] {
+        func root(_ id: Int) -> Int {
+            var r = id
+            while let p = codePlace[r], p != r { r = p }
+            return r
+        }
+        let ra = root(a), rb = root(b.id)
+        if ra != rb { codePlace[max(ra, rb)] = min(ra, rb) }
+    }
+    for t in codeTracks {
+        var r = t.id
+        while let p = codePlace[r], p != r { r = p }
+        codePlace[t.id] = r
+    }
     var groups: [String: [Int]] = [:]
     var order: [String] = []
     for (k, t) in tracks.enumerated().sorted(by: { $0.element.first < $1.element.first }) {
-        let key = t.isCode ? "\u{0}code" : normalizedForMatch(t.text)
+        let key = t.isCode ? "\u{0}code\(codePlace[t.id] ?? t.id)" : normalizedForMatch(t.text)
         if groups[key] == nil { order.append(key) }
         groups[key, default: []].append(k)
     }
+    var codeNumber = 0
     let entries = order.enumerated().map { n, key -> TextEntry in
         let ks = groups[key]!
+        let isCode = tracks[ks[0]].isCode
+        if isCode { codeNumber += 1 }
         return TextEntry(
-            id: n + 1, text: tracks[ks[0]].text, trackIDs: ks.map { tracks[$0].id },
+            id: n + 1, text: isCode ? "\(codeText) \(codeNumber)" : tracks[ks[0]].text, trackIDs: ks.map { tracks[$0].id },
             firstFrame: ks.map { tracks[$0].first }.min()!,
             frameCount: ks.reduce(0) { $0 + tracks[$1].last - tracks[$1].first + 1 },
             kinds: Set(ks.flatMap { tracks[$0].parts.keys }))
@@ -708,15 +774,19 @@ func recognizeText(_ image: CIImage, frame: Int, time: Double, deep: Bool = fals
         let w = ext.width * 0.6, h = ext.height * 0.6
         for (fx, fy) in [(0.0, 0.0), (0.4, 0.0), (0.0, 0.4), (0.4, 0.4), (0.2, 0.2)] {
             let part = CGRect(x: ext.minX + ext.width * fx, y: ext.minY + ext.height * fy, width: w, height: h).integral
+            // 2×, up to a long side of 2300 px (a 4K part is as large as a 1080p part enlarged).
+            let scale = max(1, min(2, 2300 / max(part.width, part.height)))
+            let size = CGSize(width: (part.width * scale).rounded(), height: (part.height * scale).rounded())
             let up = image.cropped(to: part)
                 .transformed(by: CGAffineTransform(translationX: -part.minX, y: -part.minY))
-                .applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: 2, kCIInputAspectRatioKey: 1])
-                .applyingFilter("CIUnsharpMask", parameters: [kCIInputRadiusKey: 5, kCIInputIntensityKey: 1.2])
+                .applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1])
+                .applyingFilter("CIUnsharpMask", parameters: [kCIInputRadiusKey: 2.5 * scale, kCIInputIntensityKey: 1.2])
+                .cropped(to: CGRect(origin: .zero, size: size))  // sharpening spreads the extent
             let r = codeRequest()
             try VNImageRequestHandler(ciImage: up, orientation: .up, options: [:]).perform([r])
             let dx = part.minX - ext.minX, dy = part.minY - ext.minY
             quads += (r.results ?? []).map {
-                codeQuad($0, size: CGSize(width: part.width * 2, height: part.height * 2), scale: 0.5)
+                codeQuad($0, size: size, scale: part.width / size.width)
                     .map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
             }
         }
@@ -739,15 +809,15 @@ private func codeQuad(_ o: VNBarcodeObservation, size: CGSize, scale: CGFloat) -
 }
 
 /// One quad per code (a code found in the whole frame and in parts of it, or in two parts):
-/// of overlapping ones the larger is kept.
+/// the larger is kept of two where the centre of one lies in the other. (Overlapping boxes
+/// would also join a small code in the corner of the box around a slanted large one.)
 private func mergeCodeQuads(_ quads: [[CGPoint]]) -> [[CGPoint]] {
+    func centre(_ q: [CGPoint]) -> CGPoint {
+        CGPoint(x: q.reduce(0) { $0 + $1.x } / CGFloat(q.count), y: q.reduce(0) { $0 + $1.y } / CGFloat(q.count))
+    }
     var out: [[CGPoint]] = []
     for q in quads {
-        let b = boundingBox(q)
-        if let i = out.firstIndex(where: {
-            let o = boundingBox($0), inter = o.intersection(b)
-            return !inter.isNull && inter.width * inter.height >= 0.3 * min(o.width * o.height, b.width * b.height)
-        }) {
+        if let i = out.firstIndex(where: { quadContains($0, centre(q)) || quadContains(q, centre($0)) }) {
             if abs(signedArea(q)) > abs(signedArea(out[i])) { out[i] = q }
         } else {
             out.append(q)
@@ -767,6 +837,31 @@ private func codeLines(_ r: TextReading, bounds: CGRect) -> (lines: [(CGRect, St
         corners.append(q.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) })
     }
     return (lines, corners)
+}
+
+/// `p` lies in the convex quad `q` (on its edge too).
+func quadContains(_ q: [CGPoint], _ p: CGPoint) -> Bool {
+    guard q.count == 4 else { return false }
+    let s: CGFloat = signedArea(q) >= 0 ? 1 : -1
+    return q.indices.allSatisfy { i in
+        let a = q[i], b = q[(i + 1) % 4]
+        return s * ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) >= -1e-6
+    }
+}
+
+/// `q`'s corners renamed to lie nearest `ref`'s of the same name: of the 4 turns, either way
+/// round, the one with the least distance between corners of the same name.
+func alignedCorners(_ q: [CGPoint], to ref: [CGPoint]) -> [CGPoint] {
+    guard q.count == 4, ref.count == 4 else { return q }
+    var best = q, bestCost = CGFloat.infinity
+    for order in [q, Array(q.reversed())] {
+        for shift in 0..<4 {
+            let c = (0..<4).map { order[($0 + shift) % 4] }
+            let cost = zip(c, ref).reduce(0) { $0 + hypot($1.0.x - $1.1.x, $1.0.y - $1.1.y) }
+            if cost < bestCost - 1e-9 { best = c; bestCost = cost }
+        }
+    }
+    return best
 }
 
 func boundingBox(_ q: [CGPoint]) -> CGRect {
@@ -1496,20 +1591,16 @@ func selfCheckMask() -> [String] {
             return CGPoint(x: c.x + r * cos(a), y: c.y + r * sin(a))
         }
     }
-    func contains(_ q: [CGPoint], _ p: CGPoint) -> Bool {
-        let s: CGFloat = signedArea(q) >= 0 ? 1 : -1
-        return q.indices.allSatisfy { i in
-            let a = q[i], b = q[(i + 1) % 4]
-            return s * ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) >= -1e-6
-        }
-    }
+    func contains(_ q: [CGPoint], _ p: CGPoint) -> Bool { quadContains(q, p) }
     let sq = rotated(CGPoint(x: 500, y: 500), side: 100, degrees: 30)
     expect(abs(abs(signedArea(outset(sq, by: 10))) - 120 * 120) < 1, "code: outset moves every edge by the distance")
     expect(abs(abs(signedArea(outset(Array(sq.reversed()), by: 10))) - 120 * 120) < 1, "code: outset works either way round")
-    func codeTrack(_ id: Int, _ frames: [Int], at c: CGPoint) -> TextTrack {
-        let q = rotated(c, side: 100, degrees: 30), box = boundingBox(q)
-        let rel = q.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) }
-        var t = TextTrack(id: id, samples: frames.map { TextSample(frame: $0, rect: box, string: codeText, text: nil, corners: rel) })
+    func codeTrack(_ id: Int, _ frames: [Int], at c: CGPoint, shift: Int = 0, places: [Int: CGPoint] = [:]) -> TextTrack {
+        var t = TextTrack(id: id, samples: frames.map { f in
+            let q = rotated(places[f] ?? c, side: 100, degrees: 30), box = boundingBox(q)
+            let rel = (0..<4).map { k in q[(k + shift) % 4] }.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) }
+            return TextSample(frame: f, rect: box, string: codeText, text: nil, corners: rel)
+        })
         t.isCode = true
         t.text = codeText
         t.parts = [.qr: [whole]]
@@ -1529,14 +1620,35 @@ func selfCheckMask() -> [String] {
     // The corner of the upright box around the code is left alone.
     expect(qm.codes[5].first.map { !contains($0, CGPoint(x: boundingBox(truth).minX + 2, y: boundingBox(truth).minY + 2)) } ?? false,
            "code: the corner of the box around a slanted code is not hidden")
-    expect(qm.codes[20].count == 1 && abs(boundingBox(qm.codes[20][0]).midX - 500) < 30, "code: across a gap it moves between the places")
-    expect(qm.codes[12].count == 1, "code: a continued code is not held at its place as well (\(qm.codes[12].count))")
+    expect(qm.codes[20].contains { abs(boundingBox($0).midX - 500) < 30 }, "code: across a gap it moves between the places")
+    // Without a cut, also held where it was and where it is next (as long as a code is held).
+    expect(qm.codes[12].contains { q in truth.allSatisfy { contains(q, $0) } }, "code: across a gap, also held at its place")
     // Across a cut it jumps: at its old place before, at the new one after.
     let qc = codeScreen([qa, qb], cuts: [20]).mask(qo)
     expect(qc.codes[19].allSatisfy { boundingBox($0).midX < 400 } && !qc.codes[19].isEmpty, "code: before a cut, at its old place")
     expect(qc.codes[20].allSatisfy { boundingBox($0).midX > 600 } && !qc.codes[20].isEmpty, "code: after a cut, at its new place")
     expect(qc.codes[29].allSatisfy { q in rotated(CGPoint(x: 700, y: 500), side: 100, degrees: 30).allSatisfy { contains(q, $0) } },
            "code: after a cut, the new place holds the code")
+    // Corners named differently (the code read turned): matched, not averaged into a smaller quad.
+    let turned = codeScreen([qa, codeTrack(1, [30, 35, 40], at: CGPoint(x: 300, y: 500), shift: 1)], cuts: []).mask(qo)
+    expect(turned.codes[20].contains { q in truth.allSatisfy { contains(q, $0) } }, "code: corners named after a turn are matched across a gap")
+    let mixed = codeTrack(0, [0, 5, 10], at: CGPoint(x: 300, y: 500))
+    var mixedSamples = mixed.samples
+    mixedSamples[1].corners = mixedSamples[1].corners.map { c in (0..<4).map { c[($0 + 2) % 4] } }
+    var mt = TextTrack(id: 0, samples: mixedSamples)
+    mt.isCode = true
+    mt.makeSteady(times: times)
+    expect(mt.codeQuads(atFrame: 5, times: times, extend: 0).map { $0.allSatisfy { q in truth.allSatisfy { contains(q, $0) } } } ?? false,
+           "code: corners named after a half turn are matched before averaging")
+    // A cut between two readings of one track: the code jumps, it does not slide between.
+    let jump = codeTrack(0, [10, 13], at: CGPoint(x: 300, y: 500), places: [13: CGPoint(x: 700, y: 500)])
+    let jq = jump.codeQuads(atFrame: 11, times: times, extend: 0, cuts: [12]) ?? []
+    expect(jq.count == 1 && truth.allSatisfy { contains(jq[0], $0) }, "code: before a cut within a track, at its old place")
+    // The nearest code continues one, not the first to start (two codes side by side).
+    let near0 = codeTrack(0, [0, 5, 10], at: CGPoint(x: 300, y: 500))
+    let other = codeTrack(1, [15, 20], at: CGPoint(x: 420, y: 500)), same = codeTrack(2, [18, 25], at: CGPoint(x: 300, y: 500))
+    let links = ScreenText.continuations(of: [near0, other, same], times: times, all: false) ?? [:]
+    expect(links[0]?.id == 2, "code: continued by the nearest code (\(links[0]?.id ?? -1))")
     // Drawn: blocks inside the quad, the picture outside it (in the corner of its box).
     let checker = CIFilter(name: "CICheckerboardGenerator", parameters: [
         "inputCenter": CIVector(x: 0, y: 0), "inputColor0": CIColor.white, "inputColor1": CIColor.black, "inputWidth": 3,
@@ -1550,5 +1662,17 @@ func selfCheckMask() -> [String] {
     expect(mid.allSatisfy { $0 > 40 && $0 < 215 }, "code: inside the quad the checker is averaged into blocks (\(mid))")
     let corner = (55...61).map { gray($0, 58) }
     expect(Set(corner).isSubset(of: [0, 255]) || corner.allSatisfy { $0 < 8 || $0 > 247 }, "code: outside the quad the picture is kept (\(corner))")
+    // Fine blocks: still at most `maxCodeBlocks` across the code (finer ones left codes readable).
+    let fine = codeBlocks(checker, over: checker, codes: [diamond], block: 2)
+    CIContext().render(fine, toBitmap: &px, rowBytes: 800, bounds: CGRect(x: 0, y: 0, width: 200, height: 200), format: .RGBA8, colorSpace: nil)
+    let row = (70...130).map { gray($0, 100) }
+    let changes = zip(row, row.dropFirst()).filter { abs($0 - $1) > 6 }.count
+    expect(changes <= 16, "code: few blocks across a code with a fine block size (\(changes) changes)")
+    // A quad that cannot be straightened (corners crossed) is hidden by its box.
+    let crossed = [diamond[0], diamond[2], diamond[1], diamond[3]]
+    let boxed = codeBlocks(checker, over: checker, codes: [crossed], block: 12)
+    CIContext().render(boxed, toBitmap: &px, rowBytes: 800, bounds: CGRect(x: 0, y: 0, width: 200, height: 200), format: .RGBA8, colorSpace: nil)
+    let inBox = (95...105).map { gray($0, 100) } + (60...64).map { gray($0, 60) }
+    expect(inBox.allSatisfy { $0 > 40 && $0 < 215 }, "code: a crossed quad is hidden by its box (\(inBox))")
     return failures
 }

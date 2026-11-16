@@ -267,7 +267,7 @@ public func applyBlur(
 ) -> CIImage {
     let ext = img.extent
     let boxes = (rects + moving).map { $0.intersection(ext) }.filter { !$0.isNull && !$0.isEmpty }
-    let quads = codes.filter { boundingBox($0).intersects(ext) }
+    let quads = codes.filter { !$0.isEmpty && boundingBox($0).intersects(ext) }
     guard !boxes.isEmpty || !quads.isEmpty else { return img }
     // Blocks as in `applyMosaic` (text blocks move with the text): over the whole image when
     // there are faces, else over the picture as it is (outside the boxes it only shows in the
@@ -286,7 +286,7 @@ public func applyBlur(
     }
     for q in quads {
         hard = filledQuad(q).composited(over: hard)
-        wide = filledQuad(outset(q, by: 2 * fade)).composited(over: wide)
+        wide = filledQuad(isDrawableQuad(q) ? outset(q, by: 2 * fade) : q).composited(over: wide)
     }
     // The soft mask is blurred from the boxes widened by 2× the fade, so it is still ~0.98 at
     // a box's edge and falls smoothly from there. Blurred from the boxes themselves it was
@@ -300,37 +300,67 @@ public func applyBlur(
     ).cropped(to: ext)
 }
 
+/// At most this many mosaic blocks across a QR code, whatever the block size: blocks finer
+/// than the code's modules leave it readable. A code over most of a screen recording, hidden
+/// with 8 or 16 px blocks, was still decoded in every frame; with at most 6, 8 or 10 blocks a
+/// side, also with 4 px blocks, in none (21- and 39-module codes of 300–1000 px, 2026-11-16).
+let maxCodeBlocks: CGFloat = 6
+
+/// The quad can be straightened and drawn: 4 finite corners making a convex quad of some size.
+/// Anything else (corners in the wrong order, a code seen edge on) is hidden by its box.
+func isDrawableQuad(_ q: [CGPoint]) -> Bool {
+    guard q.count == 4, q.allSatisfy({ $0.x.isFinite && $0.y.isFinite }), abs(signedArea(q)) >= 4 else { return false }
+    let turns = q.indices.map { i -> CGFloat in
+        let a = q[i], b = q[(i + 1) % 4], c = q[(i + 2) % 4]
+        return (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)
+    }
+    return turns.allSatisfy { $0 > 0 } || turns.allSatisfy { $0 < 0 }
+}
+
 /// QR codes in blocks cut along each code, drawn over `base`: the code (with its margin) is
-/// straightened to an upright rectangle, made into whole blocks of about `block` px (at
-/// least 3 a side), and put back where it lies. A slanted code filmed at an angle is covered
-/// by a slanted quad with blocks that follow the code, instead of the upright box around it,
-/// which also hid the text beside it; the blocks move with the code, so they do not change
-/// while the camera moves.
+/// straightened to an upright rectangle, made into whole blocks of about `block` px (3 to
+/// `maxCodeBlocks` a side), and put back where it lies. A slanted code filmed at an angle is
+/// covered by a slanted quad with blocks that follow the code, instead of the upright box
+/// around it, which also hid the text beside it; the blocks move with the code, so they do not
+/// change while the camera moves. A quad that cannot be drawn so is hidden by its box.
 func codeBlocks(_ img: CIImage, over base: CIImage, codes: [[CGPoint]], block: CGFloat) -> CIImage {
     let ext = img.extent
     var out = base
-    for q in codes where q.count == 4 && abs(signedArea(q)) >= 4 && boundingBox(q).intersects(ext) {
-        func v(_ p: CGPoint) -> CIVector { CIVector(x: p.x, y: p.y) }
-        let flat = img.clampedToExtent().applyingFilter("CIPerspectiveCorrection", parameters: [
-            "inputTopLeft": v(q[0]), "inputTopRight": v(q[1]), "inputBottomRight": v(q[2]), "inputBottomLeft": v(q[3]),
-        ])
-        let fe = flat.extent
-        guard fe.width >= 1, fe.height >= 1, fe.width.isFinite, fe.height.isFinite else { continue }
-        let nx = max(3, (fe.width / block).rounded()), ny = max(3, (fe.height / block).rounded())
-        let grid = flat
-            .transformed(by: CGAffineTransform(translationX: -fe.minX, y: -fe.minY))
-            .transformed(by: CGAffineTransform(scaleX: nx * block / fe.width, y: ny * block / fe.height))
-            .cropped(to: CGRect(x: 0, y: 0, width: nx * block, height: ny * block))
-        let blocks = pixellated(grid, block: block, origin: .zero)
-        out = blocks.applyingFilter("CIPerspectiveTransform", parameters: [
-            "inputTopLeft": v(q[0]), "inputTopRight": v(q[1]), "inputBottomRight": v(q[2]), "inputBottomLeft": v(q[3]),
-        ]).composited(over: out)
+    for q in codes where !q.isEmpty && boundingBox(q).intersects(ext) {
+        if let b = quadBlocks(img, q, block: block) {
+            out = b.composited(over: out)
+        } else {
+            let box = boundingBox(q).intersection(ext)
+            let b = max(block, max(box.width, box.height) / maxCodeBlocks)
+            out = pixellated(img, block: b, origin: box.origin).cropped(to: box).composited(over: out)
+        }
     }
     return out.cropped(to: ext)
 }
 
-/// White inside the quad, clear outside.
+private func quadBlocks(_ img: CIImage, _ q: [CGPoint], block: CGFloat) -> CIImage? {
+    guard isDrawableQuad(q) else { return nil }
+    func v(_ p: CGPoint) -> CIVector { CIVector(x: p.x, y: p.y) }
+    let flat = img.clampedToExtent().applyingFilter("CIPerspectiveCorrection", parameters: [
+        "inputTopLeft": v(q[0]), "inputTopRight": v(q[1]), "inputBottomRight": v(q[2]), "inputBottomLeft": v(q[3]),
+    ])
+    let fe = flat.extent
+    guard fe.width >= 1, fe.height >= 1, fe.width.isFinite, fe.height.isFinite else { return nil }
+    let nx = min(maxCodeBlocks, max(3, (fe.width / block).rounded()))
+    let ny = min(maxCodeBlocks, max(3, (fe.height / block).rounded()))
+    // Blocks of `block` px on the straightened code: its size changes, the block count does not.
+    let grid = flat
+        .transformed(by: CGAffineTransform(translationX: -fe.minX, y: -fe.minY))
+        .transformed(by: CGAffineTransform(scaleX: nx * block / fe.width, y: ny * block / fe.height))
+        .cropped(to: CGRect(x: 0, y: 0, width: nx * block, height: ny * block))
+    return pixellated(grid, block: block, origin: .zero).applyingFilter("CIPerspectiveTransform", parameters: [
+        "inputTopLeft": v(q[0]), "inputTopRight": v(q[1]), "inputBottomRight": v(q[2]), "inputBottomLeft": v(q[3]),
+    ])
+}
+
+/// White inside the quad (its box when it cannot be drawn as a quad), clear outside.
 func filledQuad(_ q: [CGPoint]) -> CIImage {
+    guard isDrawableQuad(q) else { return CIImage(color: .white).cropped(to: boundingBox(q)) }
     func v(_ p: CGPoint) -> CIVector { CIVector(x: p.x, y: p.y) }
     return CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 64, height: 64)).applyingFilter("CIPerspectiveTransform", parameters: [
         "inputTopLeft": v(q[0]), "inputTopRight": v(q[1]), "inputBottomRight": v(q[2]), "inputBottomLeft": v(q[3]),
@@ -386,7 +416,7 @@ func steadyBoxes(_ boxes: [CGRect?], centreFrames: Int, sizeFrames: Int, marginF
 /// in the run (upright when the run has none), a median over ±0.15 s drops single wrong
 /// readings, then a centred mean over ±0.3 s smooths what is left without lagging behind a
 /// head that tilts (measured on a picture turned ±24° every 4 s: within 3° of the head, the
-/// frame-to-frame change itself changing by 0.06° rms). Limited to ±45°: Vision finds hardly any face tilted further.
+/// frame-to-frame change itself changing by 0.068° rms). Limited to ±45°: Vision finds hardly any face tilted further.
 func steadyAngles(_ boxes: [CGRect?], _ angles: [CGFloat?], fps: Double) -> [CGFloat] {
     var out = [CGFloat](repeating: 0, count: boxes.count)
     let medianFrames = max(1, Int((0.15 * fps).rounded())), meanFrames = max(1, Int((0.3 * fps).rounded()))
