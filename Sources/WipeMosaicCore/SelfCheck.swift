@@ -97,6 +97,13 @@ public func selfCheck() -> [String] {
     expect(kinds("hanako.yamada@example.com")[.email] != nil, "email")
     expect(kinds("hanako.yamada  @ example.com")[.email] == ["hanako.yamada  @ example.com"], "email with two spaces")
     expect(kinds("〒100-0000東京都みほん区")[.address]?.first == "〒100-0000東京都みほん区", "address to the line end")
+    // License plates: the number line alone (the kana often misread), or the whole plate.
+    for p in ["12-34", "あ 12-34", "$12-34", "※ 12-34", "ぁ12－34", "・・12", "• 123", "・・・1", "品川 300 あ 12-34", "品川300さ12-34", "１２-３４", "3 12-34", "12–34", "12一34", "1 2-34", "つくば 300 あ 12-34", "品川 30A あ 12-34", "300 あ 12-34", "..12", "さ.12"] {
+        expect(kinds(p)[.plate] != nil, "plate \(p)")
+    }
+    for p in ["電話は12-34まで", "12-34-56", "2026-11", "12:34", "123", "第12-34号", "1234", "品川区1-2-3", "ver 1.2", "p.12", "v.2", "1.5", ".99", "03 12", "312-345", "2026/11/16"] {
+        expect(kinds(p)[.plate] == nil, "not a plate: \(p)")
+    }
 
     let full = "ＹＡＭＡＤＡ＿Ｔさん"
     expect(wordRanges(in: full, words: [normalizedForMatch("yamada_t")]).count == 1, "full-width word")
