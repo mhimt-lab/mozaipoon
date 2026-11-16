@@ -6,3 +6,5 @@ testdata/
 # Icon drafts (only AppIcon.svg / AppIcon.png are the source of the app icon)
 assets/icon/v*.svg
 assets/icon/v*.png
+# The plate detector's model (its licence is not settled: docs/DEVELOPMENT.md)
+Models/

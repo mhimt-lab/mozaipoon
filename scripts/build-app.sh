@@ -13,6 +13,8 @@ APP=build/モザイぷーん.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/WipeMosaic" "$APP/Contents/MacOS/WipeMosaic"
+# The plate detector's model, where there is one (not in the repository: docs/DEVELOPMENT.md).
+if [ -d Models/PlateDetector.mlmodelc ]; then cp -R Models/PlateDetector.mlmodelc "$APP/Contents/Resources/"; fi
 
 # App icon: assets/icon/AppIcon.png (1024×1024, from AppIcon.svg via scripts/render-icon.mjs).
 ICONSET=$(mktemp -d)/AppIcon.iconset

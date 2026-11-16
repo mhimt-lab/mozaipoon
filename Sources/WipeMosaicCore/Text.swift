@@ -454,7 +454,9 @@ public struct TextMask: Sendable {
     public let hidden: Set<Int>
     /// For each word (as typed), the number of lines it was found in (see `wordLineCounts`).
     public let wordLines: [String: Int]
-    public var isEmpty: Bool { hidden.isEmpty }
+    /// Plates found by the detector are hidden (`ScreenText.plateBoxes`, in `frames`).
+    public var hidesPlates = false
+    public var isEmpty: Bool { hidden.isEmpty && !hidesPlates }
 }
 
 /// Text found on screen in a video (screen recordings).
@@ -475,6 +477,12 @@ public struct ScreenText: Sendable {
     let cuts: [Int]
     /// Read for plates too (`analyzeText`'s `plates`): large frames in parts, plates followed.
     public var platesRead = true
+    /// The plates found by the detector (PlateDetector.swift): the boxes to hide in every
+    /// frame, room included. Nil without the detector: plates are then the lines read as one.
+    var plateBoxes: [[CGRect]]? = nil
+    /// The number of plates the detector found (a car's plate found again after a while counts
+    /// again), nil without it.
+    public var plateCount: Int? = nil
 
     /// Room around a code `dt` seconds after (or before) it was last found: the camera moves
     /// it meanwhile, more the longer it goes unseen — up to a quarter of its side by 0.5 s.
@@ -614,15 +622,23 @@ public struct ScreenText: Sendable {
                                                  CGPoint(x: b.maxX, y: b.minY), CGPoint(x: b.minX, y: b.minY)]
             codes[f].append(outset(quad, by: 0.1 * sqrt(max(abs(signedArea(quad)), b.width * b.height / 2)) + max(margin.width, margin.height) + extra))
         }
+        // With the detector, plates are its boxes, not the lines read as a plate.
+        let lineKinds = plateBoxes == nil ? o.kinds : o.kinds.subtracting([.plate])
+        if let plateBoxes, o.kinds.contains(.plate) {
+            for f in frames.indices where f < plateBoxes.count {
+                frames[f] += plateBoxes[f]
+                anchors[f] += plateBoxes[f].map { CGPoint(x: $0.minX, y: $0.minY) }
+            }
+        }
         for t in tracks {
             if cancelled() { return nil }
             let entry = owner[t.id] ?? 0
             var rels: [CGRect]
             if o.all || o.lines.contains(entry) {
                 // A plate reaches beyond its line.
-                rels = mergeOverlapping([whole] + (o.kinds.contains(.plate) ? t.parts[.plate] ?? [] : []))
+                rels = mergeOverlapping([whole] + (lineKinds.contains(.plate) ? t.parts[.plate] ?? [] : []))
             } else {
-                rels = o.kinds.flatMap { t.parts[$0] ?? [] }
+                rels = lineKinds.flatMap { t.parts[$0] ?? [] }
                 if !words.isEmpty, !t.isCode {
                     let w = wordParts(t, words)
                     if !w.isEmpty { wordHits.insert(entry) }
@@ -641,7 +657,7 @@ public struct ScreenText: Sendable {
         // A QR code goes unread while the camera is out of focus or moving: up to 6 s, and up to
         // 3 box heights away (the camera moves meanwhile).
         // Tracks hiding a plate: their own, or one along their chain of continuations.
-        var plateOf = Set(o.kinds.contains(.plate) ? tracks.filter { $0.parts[.plate] != nil }.map(\.id) : [])
+        var plateOf = Set(lineKinds.contains(.plate) ? tracks.filter { $0.parts[.plate] != nil }.map(\.id) : [])
         guard let next = continuations(of: tracks, all: o.all, places: plateOf, cancelled: cancelled) else { return nil }
         let byStart = tracks.sorted { $0.firstReading.frame < $1.firstReading.frame }  // as `continuations`
         // Forward then backward: every track of a chain ends with the union of its parts.
@@ -760,8 +776,10 @@ public struct ScreenText: Sendable {
             }
         }
         if cancelled() { return nil }
-        return TextMask(
+        var mask = TextMask(
             frames: frames, anchors: anchors, codes: codes, slanted: slanted, slantedAnchors: slantedAnchors, wordHits: wordHits, hidden: hidden, wordLines: wordLineCounts(o.words))
+        mask.hidesPlates = o.kinds.contains(.plate) && plateBoxes?.contains { !$0.isEmpty } == true
+        return mask
     }
 
     /// For each word, the number of lines (entries) where it was found in any reading, so the
@@ -845,6 +863,7 @@ public func analyzeText(
     var unchangedUntil: Int?  // last frame identical to the last recognized one
     var lastDeep = -Double.infinity  // time of the last recognition that also looked for small QR codes
     var lastTiles = -Double.infinity  // time of the last recognition that also read parts for plates
+    let detector = plates && plateDetectorAvailable  // plates by their shape (PlateDetector.swift)
     var prevThumb: [UInt8]?  // of the previous frame
     var cuts: [Int] = []
     var pendingCut: Int?  // a change at once, a cut if the next frame looks like it
@@ -924,7 +943,7 @@ public func analyzeText(
             // recognition: twice a second, and a code once found is followed in between.
             let deep = t - lastDeep >= deepCodeInterval - 1e-6
             if deep { lastDeep = t }
-            let tiles = plates && max(info.size.width, info.size.height) >= plateTileMinSide && t - lastTiles >= plateTileInterval - 1e-6
+            let tiles = plates && !detector && max(info.size.width, info.size.height) >= plateTileMinSide && t - lastTiles >= plateTileInterval - 1e-6
             if tiles { lastTiles = t }
             if let pool {
                 // Keep a few readings per worker in flight; more would only pile up results.
@@ -959,9 +978,15 @@ public func analyzeText(
         tracks[k].parts = kindParts(tracks[k], size: info.size)
     }
     markPlatePairs(&tracks)
+    // With the detector, plates are found by their shape in a pass of its own; without it, by
+    // reading (large frames in parts) and following what was read.
+    var detected: (boxes: [[CGRect]], count: Int)?
     if plates {
-        try followPlates(&tracks, asset: asset, info: info, times: times, cuts: cuts) { share in
-            report(times.count + Int(Double(times.count) * share * plateProgressShare / (1 - plateProgressShare)))
+        let share = { (s: Double) in report(times.count + Int(Double(times.count) * s * plateProgressShare / (1 - plateProgressShare))) }
+        if detector {
+            detected = try detectPlates(asset: asset, info: info, times: times, cuts: cuts, progress: share)
+        } else {
+            try followPlates(&tracks, asset: asset, info: info, times: times, cuts: cuts, progress: share)
         }
     }
     progress(times.count)
@@ -1014,7 +1039,7 @@ public func analyzeText(
     // little longer than the time between two recognitions.
     return ScreenText(
         times: times, fps: info.fps, size: info.size, tracks: tracks, entries: entries, extend: interval + 0.25, cuts: cuts,
-        platesRead: plates)
+        platesRead: plates, plateBoxes: detected?.boxes, plateCount: detected?.count)
 }
 
 /// Seconds between recognitions that also look for small QR codes (see `recognizeText`).
@@ -2655,6 +2680,24 @@ func selfCheckMask() -> [String] {
     let tileTaken = tileLinesTaken(tileFound, tile: CGRect(x: 0, y: 0, width: 1920, height: 1080), bounds: CGRect(x: 0, y: 0, width: 3840, height: 2160),
                                    existing: [(CGRect(x: 800, y: 300, width: 150, height: 40), "21-44"), (CGRect(x: 800, y: 800, width: 150, height: 40), "3355")])
     expect(tileTaken == [0, 3, 5, 6, 7, 8], "plate: a part's lines taken (\(tileTaken))")
+    // Plates found by the detector: a car passing near (its plate 3 widths on each time) is one
+    // plate, a slow one beside it another; the fast one is hidden between two detections, and
+    // held on before the first. Windows cover the frame.
+    let plateTimes = (0..<80).map { Double($0) / 60 }
+    let fast = (0..<6).map { CGRect(x: 100 + 290 * CGFloat($0), y: 900, width: 90, height: 50) }
+    let slow = (0..<6).map { CGRect(x: 3000 - 20 * CGFloat($0), y: 950, width: 50, height: 28) }
+    let joined = joinPlates(frames: (0..<6).map { 6 * $0 + 30 }, detections: (0..<6).map { [slow[$0], fast[$0]] }, times: plateTimes, cuts: [])
+    expect(joined.count == 2 && joined.allSatisfy { $0.frames.count == 6 }, "plate detector: two plates joined (\(joined.map(\.frames)))")
+    let hiddenPlates = plateBoxes(joined, times: plateTimes, cuts: [], bounds: CGRect(x: 0, y: 0, width: 3840, height: 2160))
+    let between = CGRect(x: 100 + 145, y: 900, width: 90, height: 50)  // the fast one at frame 33
+    expect(hiddenPlates[33].contains { $0.contains(between) }, "plate detector: hidden between two detections")
+    expect(hiddenPlates[0].isEmpty && hiddenPlates[24].count == 2 && hiddenPlates[66].count == 2 && hiddenPlates[79].isEmpty, "plate detector: held on only briefly")
+    let cutJoined = joinPlates(frames: [30, 36], detections: [[slow[0]], [slow[1]]], times: plateTimes, cuts: [34])
+    expect(cutJoined.count == 2, "plate detector: not joined across a cut")
+    let ws = plateWindows(CGSize(width: 3840, height: 2160))
+    expect(ws.allSatisfy { $0.width == $0.height && CGRect(x: 0, y: 0, width: 3840, height: 2160).contains($0) }
+        && ws.contains { $0.maxX == 3840 && $0.maxY == 2160 } && ws.contains { $0.width == 2160 } && ws.contains { $0.width == 1296 },
+        "plate detector: windows (\(ws.count))")
     // A plate followed by the tracker: held on only briefly at an end the tracker went as far as
     // it could, as other lines at an end where it lost the plate; less room for motion only
     // between its close boxes.

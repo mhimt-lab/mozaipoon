@@ -109,8 +109,10 @@ struct TextInspectorView: View {
                 .listRowSeparator(.hidden)
             ForEach(TextKind.allCases) { kind in
                 // A QR code is no line: one entry per place it was found at.
-                let count = text.entries.filter { $0.kinds.contains(kind) }.count
-                let unit = kind == .qr ? "か所" : "行"
+                // Plates found by the detector are places too, not lines.
+                let places = kind == .plate ? text.plateCount : nil
+                let count = places ?? text.entries.filter { $0.kinds.contains(kind) }.count
+                let unit = kind == .qr || places != nil ? "か所" : "行"
                 Toggle(isOn: Binding(
                     get: { model.textKinds.contains(kind) },
                     set: { on in if on { model.textKinds.insert(kind) } else { model.textKinds.remove(kind) } }
