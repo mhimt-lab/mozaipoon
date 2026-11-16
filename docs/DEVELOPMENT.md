@@ -43,6 +43,21 @@ macOS（AVFoundation）で読める形式はそのまま開ける。2026-11-12 �
 - 確認したのは ffmpeg で作った XAVC-L/XAVC-I 相当の合成 MXF（4ch モノラル音声）。**実機の FX6 の MXF・HLG の色情報の引き継ぎは未確認**
 - 開けない形式は、一覧に「開けません」と出る（MP4・MOV への変換を案内）
 
+## コードの構成（`Sources/WipeMosaicCore`）
+
+| ファイル | 中身 |
+|---|---|
+| `Mosaic.swift`・`Faces.swift` | 動画の読み込み、フレームごとの顔の検出（`forEachFrameDetecting`） |
+| `People.swift` | 顔をトラックにつなぎ、人にまとめる（`analyzeFaces`） |
+| `Cover.swift`・`Writer.swift`・`LiveMosaic.swift` | 隠し方（モザイク・ぼかし・スタンプ）と書き出し |
+| `Text.swift` | 画面の文字の型（`TextTrack`・`ScreenText`）と、隠す範囲を作る `mask` |
+| `TextAnalysis.swift` | 読むフレームを決めて読み、行をフレーム間でつなぐ（`analyzeText`） |
+| `TextKinds.swift`・`Names.swift` | 読んだ行から個人情報の種類・隠す言葉・続きの行を見つける |
+| `TextGeometry.swift` | 傾いた行と四隅のある形（QR コード）の計算 |
+| `Workers.swift` | 別プロセスの起動・結果の受け取り・停止の検知（文字と顔で共通） |
+| `TextWorkers.swift`・`FaceWorkers.swift` | 文字の読み取り・顔の検出を別プロセスに割り振る部分 |
+| `SelfCheck.swift`・`TextSelfCheck.swift` | `wipe-mosaic selfcheck` の検査 |
+
 ## 仕組み
 
 1. 顔を検出する。画面全体は毎フレーム、小さい顔のための n×n タイルは 0.1 秒ごと（人物方式）。重複はまとめる

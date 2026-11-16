@@ -14,7 +14,7 @@ import Foundation
 // process decodes the frames too (decoding is under 1 % of the time) and takes each frame's
 // faces from the worker that has them. The result is the same as detecting in one process.
 
-/// Starts an executable as a face-detecting worker (see `runTextWorkerIfRequested`).
+/// Starts an executable as a face-detecting worker (see `runWorkerIfRequested`).
 public let faceWorkerArgument = "--wipe-mosaic-face-worker"
 
 /// Worker processes for `forEachFrameDetecting`: 4 on a Mac with 16 GB or more and 8 or more
@@ -122,126 +122,48 @@ func faceWorkerMain(video: URL, arguments: [String]) throws {
     }
 }
 
-/// Worker processes detecting the faces of one video. A reader thread per worker collects the
-/// results; `faces(frame:time:)` hands them out in the order of the frames.
+/// Worker processes detecting the faces of one video; `faces(frame:time:)` hands the results
+/// out in the order of the frames.
 final class FaceWorkerPool: @unchecked Sendable {
-    private let processes: [Process]
-    private let state = NSCondition()
-    private var results: [Int: (time: Double, faces: [FaceBox])] = [:]
-    private var ended: [Bool]
-    private var errorText: [String]
-    private var failure: String?
+    private let workers: WorkerProcesses
+    private var results: [Int: (time: Double, faces: [FaceBox])] = [:]  // by frame, under `workers.state`
 
     /// Starts `count` workers; throws when they cannot be started.
     init(executable: URL, video: URL, count: Int, tiles: Int, tileInterval: Double, angleInterval: Double?, extraRegions: [CGRect]) throws {
-        var processes: [Process] = []
-        var outputs: [FileHandle] = []
-        var errors: [FileHandle] = []
-        for k in 0..<count {
-            let p = Process()
-            p.executableURL = executable
-            p.arguments = [faceWorkerArgument, video.path] + FaceWorkerTask(
+        workers = try WorkerProcesses(executable: executable, count: count, label: "顔を探す処理", takesInput: false) { k in
+            [faceWorkerArgument, video.path] + FaceWorkerTask(
                 worker: k, count: count, tiles: tiles, tileInterval: tileInterval, angleInterval: angleInterval, extraRegions: extraRegions
             ).arguments
-            let output = Pipe(), error = Pipe()
-            p.standardInput = FileHandle.nullDevice
-            p.standardOutput = output
-            p.standardError = error
-            do {
-                try p.run()
-            } catch {
-                for q in processes { q.terminate() }
-                throw ToolError("顔を探す処理を始められません（アプリを移動したり入れ替えたりしたときは、アプリを開き直してください）: \(error.localizedDescription)")
-            }
-            processes.append(p)
-            outputs.append(output.fileHandleForReading)
-            errors.append(error.fileHandleForReading)
         }
-        self.processes = processes
-        ended = Array(repeating: false, count: count)
-        errorText = Array(repeating: "", count: count)
-        for k in 0..<count {
-            errors[k].readabilityHandler = { [weak self] h in
-                let d = h.availableData
-                guard let self, !d.isEmpty else { h.readabilityHandler = nil; return }
-                self.state.withLock { self.errorText[k] = String((self.errorText[k] + String(decoding: d, as: UTF8.self)).suffix(2000)) }
+        workers.start { [weak self] k, bytes in
+            guard let self, let header = try bytes(faceRecordHeader) else { return false }
+            let v = (0..<3).map { i in header.withUnsafeBytes { Int64(littleEndian: $0.loadUnaligned(fromByteOffset: i * 8, as: Int64.self)) } }
+            // Anything else written to stdout would show up here as a nonsense header.
+            guard v[0] >= 0, v[0] % Int64(count) == Int64(k), (0...100_000).contains(v[2]) else { throw ToolError("unexpected output: \(v)") }
+            var body = Data()
+            if v[2] > 0 {
+                guard let b = try bytes(Int(v[2]) * faceRecordDoubles * 8) else { return false }
+                body = b
             }
-            let reader = Thread { [weak self] in self?.read(outputs[k], worker: k) }
-            reader.name = "face worker \(k)"
-            reader.start()
+            let faces = decodeFaces(body, count: Int(v[2]))
+            self.workers.state.withLock {
+                self.results[Int(v[0])] = (Double(bitPattern: UInt64(bitPattern: v[1])), faces)
+                self.workers.state.broadcast()
+            }
+            return true
         }
     }
 
-    deinit { terminate() }
-
-    func terminate() {
-        for p in processes where p.isRunning { p.terminate() }
-    }
+    func terminate() { workers.terminate() }
 
     /// The faces of `frame` (decoded here at `time`), waiting for its worker. Throws when the
     /// worker stopped first, or read another frame there (its time differs).
     func faces(frame: Int, time: Double) throws -> [FaceBox] {
-        let k = frame % processes.count
-        state.lock()
-        defer { state.unlock() }
-        // A frame takes well under a second; a worker silent this long is stuck.
-        let deadline = Date(timeIntervalSinceNow: 120)
-        while true {
-            if let f = failure { throw ToolError(f) }
-            if let r = results.removeValue(forKey: frame) {
-                guard r.time == time else {
-                    throw ToolError("顔を探す処理 \(k + 1) が別のフレームを読みました（\(frame) 番目：\(r.time) 秒と \(time) 秒）")
-                }
-                return r.faces
-            }
-            if ended[k] { throw ToolError(workerFailure(k) ?? "顔を探す処理 \(k + 1) が途中で止まりました") }
-            if Task.isCancelled { throw CancellationError() }
-            if Date() > deadline { throw ToolError("顔を探す処理 \(k + 1) が 2 分以上応答しません") }
-            _ = state.wait(until: Date(timeIntervalSinceNow: 0.2))
+        let k = frame % workers.count
+        let r = try workers.wait(for: k) { results.removeValue(forKey: frame) }
+        guard r.time == time else {
+            throw ToolError("顔を探す処理 \(k + 1) が別のフレームを読みました（\(frame) 番目：\(r.time) 秒と \(time) 秒）")
         }
-    }
-
-    private func workerFailure(_ k: Int) -> String? {
-        let text = errorText[k].trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : "顔を探す処理 \(k + 1) でエラーが起きました: \(text)"
-    }
-
-    private func read(_ h: FileHandle, worker k: Int) {
-        func exactly(_ n: Int) throws -> Data? {
-            var data = Data()
-            while data.count < n {
-                guard let d = try h.read(upToCount: n - data.count), !d.isEmpty else { return nil }
-                data.append(d)
-            }
-            return data
-        }
-        do {
-            while let header = try exactly(faceRecordHeader) {
-                let v = (0..<3).map { i in header.withUnsafeBytes { Int64(littleEndian: $0.loadUnaligned(fromByteOffset: i * 8, as: Int64.self)) } }
-                // Anything else written to stdout would show up here as a nonsense header.
-                guard v[0] >= 0, v[0] % Int64(processes.count) == Int64(k), (0...100_000).contains(v[2]) else {
-                    throw ToolError("unexpected output: \(v)")
-                }
-                var body = Data()
-                if v[2] > 0 {
-                    guard let b = try exactly(Int(v[2]) * faceRecordDoubles * 8) else { break }
-                    body = b
-                }
-                let faces = decodeFaces(body, count: Int(v[2]))
-                state.withLock {
-                    results[Int(v[0])] = (Double(bitPattern: UInt64(bitPattern: v[1])), faces)
-                    state.broadcast()
-                }
-            }
-        } catch {
-            state.withLock { failure = failure ?? "顔を探す処理 \(k + 1) の結果を受け取れませんでした: \(error)" }
-        }
-        processes[k].waitUntilExit()
-        // Let the last lines of stderr arrive before reporting why it stopped.
-        Thread.sleep(forTimeInterval: 0.05)
-        state.withLock {
-            ended[k] = true
-            state.broadcast()
-        }
+        return r.faces
     }
 }

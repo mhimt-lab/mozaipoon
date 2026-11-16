@@ -2,7 +2,7 @@ import Foundation
 import WipeMosaicCore
 
 // A text worker started by `analyzeText` runs and exits here.
-runTextWorkerIfRequested()
+runWorkerIfRequested()
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data("error: \(message)\n".utf8))
