@@ -44,6 +44,9 @@ struct TextSample: @unchecked Sendable {
 public struct TextTrack: Sendable {
     public let id: Int
     fileprivate(set) var samples: [TextSample]
+    /// Readings that do not place the line: Vision gave its text with another line's box
+    /// (`droppingMixedUpReadings`). Their text still counts (kinds, words, continuations).
+    fileprivate(set) var offPlace: [TextSample] = []
     /// Parts to hide per kind, relative to the line box (0...1).
     fileprivate(set) var parts: [TextKind: [CGRect]] = [:]
     /// The most common reading of the line.
@@ -886,7 +889,7 @@ public func analyzeText(
     }
     progress(times.count)
 
-    var tracks = builder.tracks
+    var tracks = droppingMixedUpReadings(builder.tracks, times: times)
     for k in tracks.indices {
         tracks[k].measureTilt(times: times)  // before the parts, measured along a slanted line
         tracks[k].text = mostCommonReading(tracks[k])
@@ -1401,6 +1404,12 @@ private func distinctReadings(_ t: TextTrack) -> [TextSample] {
             out.append(s)
         }
     }
+    // A reading off its place has another line's box: its text only (a part found in it alone
+    // has no box, and the whole line is hidden).
+    for s in t.offPlace where at[s.string] == nil {
+        at[s.string] = out.count
+        out.append(TextSample(frame: s.frame, rect: s.rect, string: s.string, text: nil))
+    }
     return out
 }
 
@@ -1415,6 +1424,115 @@ private func kindParts(_ t: TextTrack, size: CGSize) -> [TextKind: [CGRect]] {
         }
     }
     return out.mapValues(mergeOverlapping)
+}
+
+/// Vision sometimes gives the lines of a frame each another line's text: in a chat starting to
+/// scroll, the address line's box read as the line below it, that one's as the URL of a later
+/// message, while the URL's own line and the address line's text were left out (2026-11-16).
+/// The line below then seemed to jump onto the address line for a frame, and the URL to appear
+/// on it; as a URL its whole line was hidden there, the address line's start too, for the time
+/// a track is continued before and after it.
+///
+/// Judged only at a frame that agrees with the frames around it: of the upright lines read
+/// before and after it, two thirds or more are read where they are expected (moving evenly
+/// between those readings). A scroll by whole lines at once (an arrow key, a notch of the
+/// wheel) or a moment of another screen puts most lines elsewhere, and nothing is changed
+/// there. At such a frame, where a line read clearly otherwise (similarity below 0.3 to all its
+/// readings; readings of one line misread differently, as 路線情服 and 路線價報, are about
+/// 0.5) is expected and nothing of it was read:
+/// - a reading of a track off its own expected place no longer places the track (it goes on
+///   between its readings before and after), but its text is kept (`TextTrack.offPlace`): it
+///   may be the only correct reading of the line. Not when another line read then moved the
+///   same way (a part of the screen scrolled), nor when the reading before or after it is at
+///   the same place;
+/// - a track of up to two readings of 4 characters or more is dropped when its text is also
+///   expected elsewhere then, and nothing of it was read there (one or two characters, as
+///   "ね", are often on screen twice).
+/// The same text really appearing for a moment over another line, with its other place not
+/// read either, cannot be told apart (LIMITATIONS).
+func droppingMixedUpReadings(_ tracks: [TextTrack], times: [Double]) -> [TextTrack] {
+    func upright(_ s: TextSample) -> Bool {
+        guard let c = s.corners, c.count == 4 else { return true }
+        let q = place(c, in: s.rect)
+        return abs(atan2(q[1].y - q[0].y, q[1].x - q[0].x)) < minTilt
+    }
+    func sameArea(_ a: CGRect, _ b: CGRect) -> Bool {
+        let i = a.intersection(b)
+        return !i.isNull && i.width * i.height >= 0.5 * max(a.width * a.height, b.width * b.height)
+    }
+    // The readings of each track, to compare text with (any of them may be the misread one).
+    let keys = tracks.map { Set($0.samples.map { normalizedForMatch($0.string) }) }
+    func similar(_ k: Int, _ key: String) -> Double { keys[k].map { similarity($0, key) }.max() ?? 0 }
+    // Samples by frame, and the tracks read before and after each frame read.
+    var at: [Int: [(track: Int, sample: Int)]] = [:]
+    for (k, t) in tracks.enumerated() { for (i, s) in t.samples.enumerated() { at[s.frame, default: []].append((k, i)) } }
+    let frames = at.keys.sorted()
+    let byFirst = tracks.indices.sorted { tracks[$0].first < tracks[$1].first }
+    var open: [Int] = [], next = 0
+    var offPlace: [Int: Set<Int>] = [:]  // track → indices of samples off their place
+    var mixedUp = Set<Int>(), cleared = Set<Int>()  // short tracks found mixed up / not
+    for f in frames {
+        while next < byFirst.count, tracks[byFirst[next]].first < f { open.append(byFirst[next]); next += 1 }
+        open.removeAll { tracks[$0].last <= f }
+        // Where each line read before and after is expected, and whether it was read at f.
+        var expected: [Int: CGRect] = [:]
+        var readAt: [Int: [Int]] = [:]
+        for (k, i) in at[f] ?? [] { readAt[k, default: []].append(i) }
+        for k in open {
+            let ss = tracks[k].samples
+            var lo = 0, hi = ss.count  // first sample after f
+            while lo < hi { let mid = (lo + hi) / 2; if ss[mid].frame > f { hi = mid } else { lo = mid + 1 } }
+            var j = lo - 1
+            while j >= 0, ss[j].frame == f { j -= 1 }
+            guard j >= 0, lo < ss.count, upright(ss[j]), upright(ss[lo]) else { continue }
+            let a = ss[j], b = ss[lo]
+            let u = CGFloat((times[f] - times[a.frame]) / max(times[b.frame] - times[a.frame], 1e-9))
+            expected[k] = lerp(a.rect, b.rect, u)
+        }
+        let inPlace = expected.filter { k, e in (readAt[k] ?? []).contains { sameArea(tracks[k].samples[$0].rect, e) } }.count
+        let agrees = expected.count >= 3 && inPlace * 3 >= expected.count * 2
+        guard agrees else {
+            for (m, _) in at[f] ?? [] where tracks[m].samples.count <= 2 { cleared.insert(m) }
+            continue
+        }
+        // A line read otherwise expected at the place of `s`, nothing of it read at f (`read`).
+        func other(_ m: Int, _ s: TextSample, read: [Int: [Int]]) -> Bool {
+            let key = normalizedForMatch(s.string)
+            return expected.contains { k, e in k != m && read[k] == nil && sameArea(e, s.rect) && similar(k, key) < 0.3 }
+        }
+        // First the readings off their own place, then the short tracks, with those readings
+        // left out: the line read off its place is then not read at f.
+        // How far each line read at f is from where it was expected.
+        var shifts: [(track: Int, dx: CGFloat, dy: CGFloat)] = []
+        for (k, e) in expected { for i in readAt[k] ?? [] { let r = tracks[k].samples[i].rect; shifts.append((k, r.midX - e.midX, r.midY - e.midY)) } }
+        var read = readAt
+        for (m, i) in at[f] ?? [] {
+            let s = tracks[m].samples[i], ss = tracks[m].samples
+            guard upright(s), let own = expected[m], !sameArea(own, s.rect), other(m, s, read: readAt) else { continue }
+            // Not when another line read at f moved the same way (a part of the screen scrolled),
+            // nor when the reading before or after is at the same place (held there).
+            let dx = s.rect.midX - own.midX, dy = s.rect.midY - own.midY, tolerance = s.rect.height / 2
+            if shifts.contains(where: { $0.track != m && abs($0.dx - dx) <= tolerance && abs($0.dy - dy) <= tolerance }) { continue }
+            if (i > 0 && sameArea(ss[i - 1].rect, s.rect)) || (i + 1 < ss.count && sameArea(ss[i + 1].rect, s.rect)) { continue }
+            offPlace[m, default: []].insert(i)
+            read[m] = read[m]?.filter { $0 != i }
+            if read[m]?.isEmpty == true { read[m] = nil }
+        }
+        for (m, i) in at[f] ?? [] where tracks[m].samples.count <= 2 {
+            let s = tracks[m].samples[i]
+            let key = normalizedForMatch(s.string)
+            let mixed = key.count >= 4 && upright(s) && other(m, s, read: read)
+                && expected.contains { k, e in k != m && read[k] == nil && !sameArea(e, s.rect) && similar(k, key) >= 0.95 }
+            if mixed { mixedUp.insert(m) } else { cleared.insert(m) }
+        }
+    }
+    // Built from samples alone (as `TrackBuilder` makes them), numbered again in order.
+    return tracks.indices.filter { !(mixedUp.contains($0) && !cleared.contains($0)) }.enumerated().map { id, k in
+        let off = offPlace[k] ?? []
+        var t = TextTrack(id: id, samples: tracks[k].samples.enumerated().filter { !off.contains($0.offset) }.map(\.element))
+        t.offPlace = tracks[k].samples.enumerated().filter { off.contains($0.offset) }.map(\.element)
+        return t
+    }
 }
 
 /// Information often continues on the next line: an address (building name, room number)
@@ -1731,6 +1849,104 @@ func selfCheckMask() -> [String] {
         return ScreenText(times: times, fps: 30, size: size, tracks: tracks, entries: entries, extend: 0.1, cuts: [])
     }
     let all = Set(TextKind.allCases)
+    // Vision gave three lines each another's text at frame 6 (read every 3 frames): the address
+    // line's box the text of the line below, that one's the URL of a later message; the URL's
+    // own line and the address line's text were left out.
+    func read(_ id: Int, _ frames: [Int], y: CGFloat, _ text: String, at moved: [Int: CGFloat] = [:]) -> TextTrack {
+        TextTrack(id: id, samples: frames.map {
+            TextSample(frame: $0, rect: CGRect(x: 100, y: moved[$0] ?? y, width: 600, height: 40), string: text, text: nil)
+        })
+    }
+    let addressLine = read(0, [0, 3, 9, 12], y: 600, "送り先の住所は〒100-0000東京")
+    let lineBelow = read(1, [0, 3, 6, 9, 12], y: 550, "都みほん区サンプル町1-2-3", at: [6: 600])
+    let urlLine = read(2, [0, 3, 9, 12], y: 200, "https://example.com/share/abc1")
+    let urlThere = read(3, [6], y: 550, "https://example.com/share/abc1")
+    // The other messages on screen, read where they are at every frame.
+    let rest = ["おはようございます", "よろしくお願いします", "ありがとうございます", "電話番号も教えてください",
+                "了解です", "はい、大丈夫です"].enumerated().map { k, text in read(4 + k, [0, 3, 6, 9, 12], y: 700 + CGFloat(k) * 50, text) }
+    let unmixed = droppingMixedUpReadings([addressLine, lineBelow, urlLine, urlThere] + rest, times: times)
+    expect(unmixed.count == 9 && unmixed.map(\.id) == Array(0..<9) && unmixed[1].samples.map(\.frame) == [0, 3, 9, 12]
+           && unmixed[1].offPlace.map(\.frame) == [6] && unmixed[0].samples.count == 4 && unmixed[2].samples.count == 4,
+           "mixed up: the text read at another line's place is dropped, and the line read off its place")
+    // The same text really there: the screen jumped (the line at its place is not read there
+    // after it), or the text is on screen twice (read at its other place too).
+    let jumped = droppingMixedUpReadings([read(0, [0, 3], y: 600, "送り先の住所は〒100-0000東京"), urlLine,
+                                          read(3, [6], y: 600, "https://example.com/share/abc1")] + rest, times: times)
+    let twice = droppingMixedUpReadings([read(0, [0, 3, 9, 12], y: 600, "送り先の住所は〒100-0000東京"),
+                                         read(2, [0, 3, 6, 9, 12], y: 200, "https://example.com/share/abc1"),
+                                         read(3, [6], y: 600, "https://example.com/share/abc1")] + rest, times: times)
+    // Another screen for a moment (most lines not read where expected), then back.
+    let others = rest.map { read($0.id, [0, 3, 9, 12], y: $0.samples[0].rect.minY, $0.samples[0].string) }
+    let moment = droppingMixedUpReadings([addressLine, urlLine, read(3, [6], y: 600, "https://example.com/share/abc1")] + others, times: times)
+    expect(jumped.count == 9 && twice.count == 9 && moment.count == 9, "mixed up: text really at the place is kept")
+    // Only part of the screen scrolled by a line and stopped (a list beside still menus): the
+    // line pushed out at the top was not read at that frame nor when pinned, and comes back.
+    // The lines moved together, so none is off its place.
+    let still = (0..<12).map { k in read(20 + k, [0, 3, 6, 30, 33], y: 100 + CGFloat(k) * 50, "メニューの項目その\(["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "壱", "弐"][k])") }
+    let list = ["送り先の住所は〒100-0000東京", "都みほん区サンプル町1-2-3", "ハイツ402です", "090-0000-1111です"].enumerated().map { k, text in
+        TextTrack(id: 40 + k, samples: (k == 3 ? [0, 3, 33] : [0, 3, 6, 30, 33]).map { f in
+            TextSample(frame: f, rect: CGRect(x: 800, y: 300 + CGFloat(k) * 50 + (f == 6 || f == 30 ? 50 : 0), width: 600, height: 40), string: text, text: nil)
+        })
+    }
+    let region = droppingMixedUpReadings(still + list, times: times)
+    expect(region.count == 16 && region.allSatisfy { $0.offPlace.isEmpty }, "mixed up: lines that moved together are not off their place")
+    // The same, scrolled back at once (a notch down and up): no reading at the same place.
+    let stillBack = still.map { read($0.id, [0, 3, 6, 9, 12], y: $0.samples[0].rect.minY, $0.samples[0].string) }
+    let scrolledBack: [TextTrack] = list.map { (t: TextTrack) -> TextTrack in
+        let frames: [Int] = t.id == 43 ? [0, 3, 9, 12] : [0, 3, 6, 9, 12]
+        let first = t.samples[0]
+        let samples: [TextSample] = frames.map { (f: Int) -> TextSample in
+            let dy: CGFloat = f == 6 ? 50 : 0
+            return TextSample(frame: f, rect: first.rect.offsetBy(dx: 0, dy: dy), string: first.string, text: nil)
+        }
+        return TextTrack(id: t.id, samples: samples)
+    }
+    let regionBack = droppingMixedUpReadings(stillBack + scrolledBack, times: times)
+    expect(regionBack.count == 16 && regionBack.allSatisfy { $0.offPlace.isEmpty }, "mixed up: lines that moved and came back together are not off their place")
+    // One line moved onto another's place and stayed there (pinned at the same place): the
+    // reading is held there, not taken as a mix-up.
+    let covered = read(10, [0, 3, 33], y: 600, "送り先の住所は〒100-0000東京")
+    let stayed = read(11, [0, 3, 6, 30, 33], y: 550, "090-0000-1111です", at: [6: 600, 30: 600])
+    let heldThere = droppingMixedUpReadings([covered, stayed] + rest, times: times)
+    expect(heldThere.allSatisfy { $0.offPlace.isEmpty }, "mixed up: a line that moved and stayed is not off its place")
+    // A new line's reading copied to the frame since when the picture was still (`newSince`):
+    // no line is read at that frame, so it is not judged there, and the track is kept.
+    let sinceStill = TextTrack(id: 3, samples: [4, 6].map {
+        TextSample(frame: $0, rect: CGRect(x: 100, y: 550, width: 600, height: 40), string: "https://example.com/share/abc1", text: nil)
+    })
+    let keptSince = droppingMixedUpReadings([addressLine, lineBelow, urlLine, sinceStill] + rest, times: times)
+    expect(keptSince.count == 10, "mixed up: a track with a reading copied back to a still frame is kept")
+    // The line expected at the place read differently (路線情服 / 路線價報): the same line, kept.
+    // The same words elsewhere (another line on screen, read 路線價報 once) are not read at that frame.
+    let sameWords = TextTrack(id: 2, samples: zip([0, 3, 9, 12], ["路续情報", "路線價報", "路续情報", "路续情報"]).map { f, text in
+        TextSample(frame: f, rect: CGRect(x: 100, y: 200, width: 600, height: 40), string: text, text: nil)
+    })
+    let misreadAt = droppingMixedUpReadings([read(0, [0, 3, 9, 12], y: 600, "路線情服"), lineBelow, sameWords,
+                                             read(3, [6], y: 600, "路線價報")] + rest, times: times)
+    expect(misreadAt.count == 10, "mixed up: a line read differently at its own place is kept")
+    let shortText = droppingMixedUpReadings([addressLine, lineBelow, read(2, [0, 3, 9, 12], y: 200, "ね"), read(3, [6], y: 550, "ね")] + rest, times: times)
+    expect(shortText.count == 10, "mixed up: a track of a few characters is kept")
+    // The reading off its place may be the only one that reads the number: it still counts.
+    let misread = read(1, [0, 3, 9, 12], y: 550, "O9O-OOOO-1111です")
+    let numberLine = TextTrack(id: 1, samples: (misread.samples + [TextSample(frame: 6, rect: CGRect(x: 100, y: 600, width: 600, height: 40),
+                                                                                string: "090-0000-1111です", text: nil)]).sorted { $0.frame < $1.frame })
+    let offNumber = droppingMixedUpReadings([addressLine, numberLine, urlLine] + rest, times: times)
+    expect(offNumber[1].offPlace.count == 1 && kindParts(offNumber[1], size: size)[.number] != nil,
+           "mixed up: the text of a reading off its place still finds the number")
+    // Scrolled by whole lines at once and then still (an arrow key, a notch of the wheel):
+    // every line is read one, two or three lines further at frame 6, and again when the
+    // picture is pinned at 30. No reading is a mix-up.
+    for step in 1...3 {
+        let lines = (0..<6).map { k in
+            TextTrack(id: k, samples: [0, 3, 6, 30].map { f in
+                TextSample(frame: f, rect: CGRect(x: 100, y: 300 + CGFloat(k) * 50 + (f >= 6 ? CGFloat(step) * 50 : 0), width: 600, height: 40),
+                           string: ["送り先の住所は〒100-0000東京", "都みほん区サンプル町1-2-3", "ハイツ402です",
+                                    "ありがとうございます", "090-0000-1111です", "hanako.yamada@example.com"][k], text: nil)
+            })
+        }
+        let kept = droppingMixedUpReadings(lines, times: times)
+        expect(kept.count == 6 && kept.allSatisfy { $0.samples.count == 4 && $0.offPlace.isEmpty }, "mixed up: a scroll by \(step) lines at once keeps every reading")
+    }
     let phone = CGRect(x: 0.1, y: 0, width: 0.3, height: 1), link = CGRect(x: 0.6, y: 0, width: 0.3, height: 1)
 
     // A chain read differently: misread first (nothing found), then the phone number, then a
@@ -2108,14 +2324,14 @@ func selfCheckMask() -> [String] {
         expect(movingMask.slanted[f].count == 1 && between.allSatisfy { p in movingMask.slanted[f].contains { contains($0, p) } },
                "slanted: after the last reading, from where it was to where it moves is hidden (frame \(f))")
     }
-    // The slant read 0.6° too steep: the height found from the box shrinks by about a third,
-    // and the ends of the long line turn 4 px off its axis; the measured height and the slack
-    // of the slant keep them in.
     // A slanted line read only once is continued before and after it (it crashed: the turn
     // between the last two readings was looked up).
     let readOnce = slantedSamples([(10, CGPoint(x: 500, y: 500))])
     let onceMask = screen([readOnce]).mask(numbers)
     expect(readOnce.isTilted && onceMask.slanted[11].count == 1 && onceMask.slanted[9].count == 1, "slanted: a line read once is hidden around it")
+    // The slant read 0.6° too steep: the height found from the box shrinks by about a third,
+    // and the ends of the long line turn 4 px off its axis; the measured height and the slack
+    // of the slant keep them in.
     let steep = slantedSamples([(0, CGPoint(x: 500, y: 500)), (15, CGPoint(x: 500, y: 500)), (30, CGPoint(x: 500, y: 500))],
                                length: 800, readAt: 20.6)
     let steepMask = screen([steep]).mask(numbers)
