@@ -16,16 +16,21 @@ public struct StickerBox: Sendable {
     /// between two appearances or held at the last known position. The face may be beside
     /// the box, so the mosaic (or blur) is drawn under the sticker with the usual margin.
     public let estimated: Bool
-    // No default for `estimated`: a box rebuilt without it would lose the mosaic under it.
-    public init(rect: CGRect, person: Int, estimated: Bool) {
+    /// Tilt of the face, counter-clockwise in Core Image coordinates (radians): the sticker is
+    /// turned by it around the middle of the box.
+    public let angle: CGFloat
+    // No defaults: a box rebuilt without `estimated` would lose the mosaic under it, and one
+    // without `angle` would stand upright on a tilted face.
+    public init(rect: CGRect, person: Int, estimated: Bool, angle: CGFloat) {
         self.rect = rect
         self.person = person
         self.estimated = estimated
+        self.angle = angle
     }
 
     /// The same box moved (e.g. into a source image whose extent does not start at 0).
     public func offsetBy(dx: CGFloat, dy: CGFloat) -> StickerBox {
-        StickerBox(rect: rect.offsetBy(dx: dx, dy: dy), person: person, estimated: estimated)
+        StickerBox(rect: rect.offsetBy(dx: dx, dy: dy), person: person, estimated: estimated, angle: angle)
     }
 }
 
@@ -204,8 +209,9 @@ public final class Sticker: @unchecked Sendable {
     private var shows: [Double: Bool] = [:]
     private let showsLock = NSLock()
 
-    /// The image placed over `face`, ready to composite over the frame.
-    func drawn(over face: CGRect, scale: Double) -> CIImage {
+    /// The image placed over `face` and turned by `angle` (radians, counter-clockwise) around
+    /// the middle of the face, ready to composite over the frame.
+    func drawn(over face: CGRect, scale: Double, angle: CGFloat = 0) -> CIImage {
         let (f, origin) = placement(over: face, scale: scale)
         // Resample from the smallest prepared size that is still at least as large.
         let level = levels.last { $0.scale >= f } ?? levels[0]
@@ -214,15 +220,23 @@ public final class Sticker: @unchecked Sendable {
             ? level.image.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: k, kCIInputAspectRatioKey: 1])
             : level.image.transformed(by: CGAffineTransform(scaleX: k, y: k))
         let e = resized.extent
-        return resized.transformed(by: CGAffineTransform(translationX: origin.x - e.minX, y: origin.y - e.minY))
+        let placed = resized.transformed(by: CGAffineTransform(translationX: origin.x - e.minX, y: origin.y - e.minY))
+        // Under a tenth of a degree the turn would only soften the picture.
+        guard abs(angle) >= .pi / 1800 else { return placed }
+        // Core Image samples the turned image bilinearly, so its edges stay smooth (checked on
+        // an opaque square turned 24°: no staircase, 2026-11-16).
+        let turn = CGAffineTransform(translationX: face.midX, y: face.midY)
+            .rotated(by: angle)
+            .translatedBy(x: -face.midX, y: -face.midY)
+        return placed.transformed(by: turn)
     }
 }
 
 /// Everything that hides one frame: boxes hidden with `render.style`, then stickers on top.
 /// `rects` are faces (margin included), `text` the on-screen text boxes (see `applyMosaic`).
 public func applyCover(
-    _ img: CIImage, rects: [CGRect], text: [CGRect] = [], textAnchors: [CGPoint] = [], stickers: [StickerBox],
-    render: RenderSettings, block: CGFloat
+    _ img: CIImage, rects: [CGRect], text: [CGRect] = [], textAnchors: [CGPoint] = [], codes: [[CGPoint]] = [],
+    stickers: [StickerBox], render: RenderSettings, block: CGFloat
 ) -> CIImage {
     // The mosaic (or blur) with the usual margin goes under a sticker whose face was not
     // detected in this frame, under one that lets part of the face show (a hole, a
@@ -234,11 +248,11 @@ public func applyCover(
     }.map { padded($0.rect, render.pad) }
     let all = rects + under
     var out = render.style == .blur
-        ? applyBlur(img, rects: all, moving: text, anchors: textAnchors, block: block)
-        : applyMosaic(img, rects: all, moving: text, anchors: textAnchors, block: block)
+        ? applyBlur(img, rects: all, moving: text, anchors: textAnchors, codes: codes, block: block)
+        : codeBlocks(img, over: applyMosaic(img, rects: all, moving: text, anchors: textAnchors, block: block), codes: codes, block: block)
     for s in stickers {
         guard let sticker = render.stickers[s.person] else { continue }
-        out = sticker.drawn(over: s.rect, scale: render.stickerScale).composited(over: out).cropped(to: img.extent)
+        out = sticker.drawn(over: s.rect, scale: render.stickerScale, angle: s.angle).composited(over: out).cropped(to: img.extent)
     }
     return out
 }
@@ -249,15 +263,18 @@ public func applyCover(
 /// Inside each box the blur is complete; it fades out over a short distance outside, so the
 /// edge does not look like a pasted grey square.
 public func applyBlur(
-    _ img: CIImage, rects: [CGRect], moving: [CGRect] = [], anchors: [CGPoint] = [], block: CGFloat
+    _ img: CIImage, rects: [CGRect], moving: [CGRect] = [], anchors: [CGPoint] = [], codes: [[CGPoint]] = [], block: CGFloat
 ) -> CIImage {
     let ext = img.extent
     let boxes = (rects + moving).map { $0.intersection(ext) }.filter { !$0.isNull && !$0.isEmpty }
-    guard !boxes.isEmpty else { return img }
+    let quads = codes.filter { boundingBox($0).intersects(ext) }
+    guard !boxes.isEmpty || !quads.isEmpty else { return img }
     // Blocks as in `applyMosaic` (text blocks move with the text): over the whole image when
     // there are faces, else over the picture as it is (outside the boxes it only shows in the
     // short fade).
-    let blocks = movingBlocks(img, over: rects.isEmpty ? img : pixellated(img, block: block), moving: moving, anchors: anchors, block: block)
+    let blocks = codeBlocks(
+        img, over: movingBlocks(img, over: rects.isEmpty ? img : pixellated(img, block: block), moving: moving, anchors: anchors, block: block),
+        codes: quads, block: block)
     let blurred = blocks.clampedToExtent()
         .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: block])
         .cropped(to: ext)
@@ -266,6 +283,10 @@ public func applyBlur(
     for b in boxes {
         hard = CIImage(color: .white).cropped(to: b).composited(over: hard)
         wide = CIImage(color: .white).cropped(to: b.insetBy(dx: -2 * fade, dy: -2 * fade)).composited(over: wide)
+    }
+    for q in quads {
+        hard = filledQuad(q).composited(over: hard)
+        wide = filledQuad(outset(q, by: 2 * fade)).composited(over: wide)
     }
     // The soft mask is blurred from the boxes widened by 2× the fade, so it is still ~0.98 at
     // a box's edge and falls smoothly from there. Blurred from the boxes themselves it was
@@ -277,6 +298,43 @@ public func applyBlur(
     return blurred.applyingFilter(
         "CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: img, kCIInputMaskImageKey: mask]
     ).cropped(to: ext)
+}
+
+/// QR codes in blocks cut along each code, drawn over `base`: the code (with its margin) is
+/// straightened to an upright rectangle, made into whole blocks of about `block` px (at
+/// least 3 a side), and put back where it lies. A slanted code filmed at an angle is covered
+/// by a slanted quad with blocks that follow the code, instead of the upright box around it,
+/// which also hid the text beside it; the blocks move with the code, so they do not change
+/// while the camera moves.
+func codeBlocks(_ img: CIImage, over base: CIImage, codes: [[CGPoint]], block: CGFloat) -> CIImage {
+    let ext = img.extent
+    var out = base
+    for q in codes where q.count == 4 && abs(signedArea(q)) >= 4 && boundingBox(q).intersects(ext) {
+        func v(_ p: CGPoint) -> CIVector { CIVector(x: p.x, y: p.y) }
+        let flat = img.clampedToExtent().applyingFilter("CIPerspectiveCorrection", parameters: [
+            "inputTopLeft": v(q[0]), "inputTopRight": v(q[1]), "inputBottomRight": v(q[2]), "inputBottomLeft": v(q[3]),
+        ])
+        let fe = flat.extent
+        guard fe.width >= 1, fe.height >= 1, fe.width.isFinite, fe.height.isFinite else { continue }
+        let nx = max(3, (fe.width / block).rounded()), ny = max(3, (fe.height / block).rounded())
+        let grid = flat
+            .transformed(by: CGAffineTransform(translationX: -fe.minX, y: -fe.minY))
+            .transformed(by: CGAffineTransform(scaleX: nx * block / fe.width, y: ny * block / fe.height))
+            .cropped(to: CGRect(x: 0, y: 0, width: nx * block, height: ny * block))
+        let blocks = pixellated(grid, block: block, origin: .zero)
+        out = blocks.applyingFilter("CIPerspectiveTransform", parameters: [
+            "inputTopLeft": v(q[0]), "inputTopRight": v(q[1]), "inputBottomRight": v(q[2]), "inputBottomLeft": v(q[3]),
+        ]).composited(over: out)
+    }
+    return out.cropped(to: ext)
+}
+
+/// White inside the quad, clear outside.
+func filledQuad(_ q: [CGPoint]) -> CIImage {
+    func v(_ p: CGPoint) -> CIVector { CIVector(x: p.x, y: p.y) }
+    return CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 64, height: 64)).applyingFilter("CIPerspectiveTransform", parameters: [
+        "inputTopLeft": v(q[0]), "inputTopRight": v(q[1]), "inputBottomRight": v(q[2]), "inputBottomLeft": v(q[3]),
+    ])
 }
 
 /// Steady boxes for a sticker: a detected face box jitters a little every frame, which a
@@ -315,6 +373,48 @@ func steadyBoxes(_ boxes: [CGRect?], centreFrames: Int, sizeFrames: Int, marginF
         for k in 0..<n {
             let m = mean(held, window(k, marginFrames))
             out[i + k] = smooth[k].insetBy(dx: -m, dy: -m).union(run[k])  // union: rounding only
+        }
+        i = j + 1
+    }
+    return out
+}
+
+/// Steady tilt for a sticker, per frame of `boxes` (the steadied boxes of one person; nil:
+/// not on screen, angle 0). The tilt measured ~10 times a second wobbles by ±2–3° between
+/// measurements (街角の3人, 2026-11-16), which turns a picture visibly back and forth. Within each
+/// run of `boxes` (as in `steadyBoxes`): frames without a measured tilt take the nearest one
+/// in the run (upright when the run has none), a median over ±0.15 s drops single wrong
+/// readings, then a centred mean over ±0.3 s smooths what is left without lagging behind a
+/// head that tilts (measured on a picture turned ±24° every 4 s: within 3° of the head, the
+/// frame-to-frame change itself changing by 0.06° rms). Limited to ±45°: Vision finds hardly any face tilted further.
+func steadyAngles(_ boxes: [CGRect?], _ angles: [CGFloat?], fps: Double) -> [CGFloat] {
+    var out = [CGFloat](repeating: 0, count: boxes.count)
+    let medianFrames = max(1, Int((0.15 * fps).rounded())), meanFrames = max(1, Int((0.3 * fps).rounded()))
+    var i = 0
+    while i < boxes.count {
+        guard boxes[i] != nil else { i += 1; continue }
+        var j = i
+        while j + 1 < boxes.count, let next = boxes[j + 1], !isJump(boxes[j]!, next) { j += 1 }
+        let known = (i...j).filter { angles[$0] != nil }
+        if !known.isEmpty {
+            // Nearest measured frame for each frame of the run (known is sorted).
+            var filled = [CGFloat](), k = 0
+            for f in i...j {
+                while k + 1 < known.count, abs(known[k + 1] - f) <= abs(known[k] - f) { k += 1 }
+                filled.append(min(.pi / 4, max(-.pi / 4, angles[known[k]]!)))
+            }
+            let n = filled.count
+            // Narrowed symmetrically near the ends of the run: a one-sided window there would
+            // pull the tilt toward where the head goes next (−3° on an upright head, 2026-11-16).
+            func window(_ m: Int, _ r: Int) -> ClosedRange<Int> { let h = min(r, m, n - 1 - m); return (m - h)...(m + h) }
+            let median = (0..<n).map { m -> CGFloat in
+                let v = window(m, medianFrames).map { filled[$0] }.sorted()
+                return v.count % 2 == 1 ? v[v.count / 2] : (v[v.count / 2 - 1] + v[v.count / 2]) / 2
+            }
+            for m in 0..<n {
+                let w = window(m, meanFrames)
+                out[i + m] = w.map { median[$0] }.reduce(0, +) / CGFloat(w.count)
+            }
         }
         i = j + 1
     }

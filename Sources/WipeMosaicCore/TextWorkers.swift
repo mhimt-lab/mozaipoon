@@ -53,21 +53,25 @@ struct TextReading {
     let width: Int
     let height: Int
     let observations: [VNRecognizedTextObservation]
+    /// Corners of the QR codes (top left, top right, bottom right, bottom left of the code),
+    /// in pixels of the frame (bottom-left origin).
+    let codes: [[CGPoint]]
 }
 
 private struct StopDecoding: Error {}
 
-/// Reads "job frame" lines from stdin (frames in increasing order), recognizes each frame and
+/// Reads "job frame deep" lines from stdin (frames in increasing order), recognizes each frame and
 /// writes the results to stdout: job, frame, the frame's time (the bits of the Double), width,
-/// height and byte count (Int64 each, little endian), then the archived observations.
+/// height and byte count (Int64 each, little endian), then the archived text observations and
+/// QR code corners (an array of the observations and the corners' numbers, 8 per code).
 private func textWorkerMain(video: URL) throws {
     let asset = AVURLAsset(url: video)
     let info = try waitFor { try await loadVideo(asset) }
-    func next() throws -> (job: Int, frame: Int)? {
+    func next() throws -> (job: Int, frame: Int, deep: Bool)? {
         guard let line = readLine() else { return nil }
         let parts = line.split(separator: " ").compactMap { Int($0) }
-        guard parts.count == 2 else { throw ToolError("bad request: \(line)") }
-        return (parts[0], parts[1])
+        guard parts.count == 3 else { throw ToolError("bad request: \(line)") }
+        return (parts[0], parts[1], parts[2] != 0)
     }
     var target = try next()
     guard target != nil else { return }
@@ -75,8 +79,10 @@ private func textWorkerMain(video: URL) throws {
     do {
         try forEachFrame(asset: asset, info: info) { i, time, image in
             while let t = target, t.frame == i {
-                let reading = try recognizeText(image, frame: i, time: time)
-                let data = try NSKeyedArchiver.archivedData(withRootObject: reading.observations, requiringSecureCoding: true)
+                let reading = try recognizeText(image, frame: i, time: time, deep: t.deep)
+                let boxes = reading.codes.flatMap { $0.flatMap { [NSNumber(value: Double($0.x)), NSNumber(value: Double($0.y))] } }
+                let data = try NSKeyedArchiver.archivedData(
+                    withRootObject: [reading.observations, boxes] as NSArray, requiringSecureCoding: true)
                 var header = Data()
                 for v in [t.job, t.frame, Int(Int64(bitPattern: time.bitPattern)), reading.width, reading.height, data.count] {
                     withUnsafeBytes(of: Int64(v).littleEndian) { header.append(contentsOf: $0) }
@@ -166,10 +172,10 @@ final class TextWorkerPool: @unchecked Sendable {
     deinit { terminate() }
 
     /// Asks the next worker in turn to read `frame` as `job`. Frames must increase.
-    func submit(job: Int, frame: Int) throws {
+    func submit(job: Int, frame: Int, deep: Bool) throws {
         let k = job % inputs.count
         do {
-            try inputs[k].write(contentsOf: Data("\(job) \(frame)\n".utf8))
+            try inputs[k].write(contentsOf: Data("\(job) \(frame) \(deep ? 1 : 0)\n".utf8))
         } catch {
             throw ToolError(state.withLock { workerFailure(k) ?? "文字を読み取る処理 \(k + 1) が途中で止まりました（\(error)）" })
         }
@@ -239,12 +245,16 @@ final class TextWorkerPool: @unchecked Sendable {
                 // nested time range, so it is decoded without it.
                 let u = try NSKeyedUnarchiver(forReadingFrom: body)
                 u.requiresSecureCoding = false
-                guard let obs = u.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? [VNRecognizedTextObservation] else {
+                guard let root = u.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? [Any], root.count == 2,
+                    let obs = root[0] as? [VNRecognizedTextObservation], let numbers = root[1] as? [NSNumber], numbers.count % 8 == 0
+                else {
                     throw ToolError("unreadable result for frame \(v[1])")
                 }
+                let n = numbers.map { CGFloat($0.doubleValue) }
+                let codes = stride(from: 0, to: n.count, by: 8).map { k in (0..<4).map { CGPoint(x: n[k + 2 * $0], y: n[k + 2 * $0 + 1]) } }
                 let reading = TextReading(
                     frame: Int(v[1]), time: Double(bitPattern: UInt64(bitPattern: v[2])), width: Int(v[3]), height: Int(v[4]),
-                    observations: obs)
+                    observations: obs, codes: codes)
                 state.withLock {
                     results[Int(v[0])] = reading
                     state.broadcast()

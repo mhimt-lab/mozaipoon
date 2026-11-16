@@ -156,18 +156,27 @@ func forEachFrame(
 /// 2026-11-14: 2 → 102s, 3 → 93s, 4–6 → 89–90s, 8 → 105s, 16 → 100s).
 func forEachFrameDetecting(
     asset: AVURLAsset, info: VideoInfo, tiles: Int, tileInterval: Double = 0, extraRegions: [CGRect],
-    batch: Int = 4,
-    _ body: (_ index: Int, _ time: Double, _ image: CIImage, _ faces: [CGRect]) throws -> Void
+    angleInterval: Double? = nil, batch: Int = 4,
+    _ body: (_ index: Int, _ time: Double, _ image: CIImage, _ faces: [FaceBox]) throws -> Void
 ) throws {
     let tileEvery = max(1, Int((tileInterval * max(info.fps, 1)).rounded()))
+    // The tilt of the faces (for stickers) every `angleInterval` seconds; it is smoothed over
+    // time anyway, and measuring it costs a landmark request per frame.
+    let angleEvery = angleInterval.map { max(1, Int(($0 * max(info.fps, 1)).rounded())) }
     var pending: [(index: Int, time: Double, image: CIImage)] = []
     func flush() throws {
         guard !pending.isEmpty else { return }
         let items = pending
-        let results = ResultBox<[CGRect]>(count: items.count)
+        let results = ResultBox<[FaceBox]>(count: items.count)
         DispatchQueue.concurrentPerform(iterations: items.count) { k in
             let t = items[k].index % tileEvery == 0 ? tiles : 1
-            results.set(k, Result { try detectFaces(image: items[k].image, tiles: t, extraRegions: extraRegions) })
+            results.set(k, Result {
+                var faces = try detectFaceBoxes(image: items[k].image, tiles: t, extraRegions: extraRegions)
+                if let every = angleEvery, items[k].index % every == 0, !faces.isEmpty {
+                    for (i, a) in faceAngles(in: items[k].image, faces: faces).enumerated() { faces[i].angle = a }
+                }
+                return faces
+            })
         }
         let faces = try results.values()
         pending.removeAll(keepingCapacity: true)
@@ -212,10 +221,10 @@ struct FaceIndex: Sendable {
 
     /// Boxes for the frame shown at `t` that are drawn without the face margin, and the
     /// corners their mosaic blocks line up with.
-    func exactRects(at t: Double) -> (rects: [CGRect], anchors: [CGPoint]) {
-        guard !frames.isEmpty else { return ([], []) }
+    func exactRects(at t: Double) -> (rects: [CGRect], anchors: [CGPoint], codes: [[CGPoint]]) {
+        guard !frames.isEmpty else { return ([], [], []) }
         let f = frames[max(0, firstIndex(atOrAfter: t + 1e-3) - 1)]
-        return (f.exact, f.exactAnchors)
+        return (f.exact, f.exactAnchors, f.codes)
     }
 
     /// Faces to mosaic at `t` (± hold, with the margin).
@@ -237,8 +246,8 @@ public func scanFaces(
 ) throws -> [FrameFaces] {
     let wipes = settings.ciWipes(videoHeight: info.size.height)
     var frames: [FrameFaces] = []
-    try forEachFrameDetecting(asset: asset, info: info, tiles: settings.render.tiles, extraRegions: wipes) { i, t, _, faces in
-        let c = classify(faces: faces, wipes: wipes, minInside: settings.minInside, keepAll: settings.keepAllInWipe)
+    try forEachFrameDetecting(asset: asset, info: info, tiles: settings.render.tiles, extraRegions: wipes) { i, t, _, boxes in
+        let c = classify(faces: boxes.map(\.rect), wipes: wipes, minInside: settings.minInside, keepAll: settings.keepAllInWipe)
         frames.append(FrameFaces(time: t, mosaic: c.mosaic, kept: c.kept))
         progress(i + 1)
     }

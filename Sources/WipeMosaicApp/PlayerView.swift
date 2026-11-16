@@ -261,17 +261,25 @@ struct ViewerView: View {
     // MARK: Text boxes
 
     /// Dashed outlines where text is hidden (not written to the file). Boxes that overlap or
-    /// touch (the words of one line) are outlined as one shape, not as doubled edges.
+    /// touch (the words of one line) are outlined as one shape, not as doubled edges. A QR code
+    /// is outlined along its four corners, as its mosaic is cut.
     private var textBoxes: some View {
         GeometryReader { geo in
             let shown = shownVideo(geo.size)
             let s = shown.width / videoSize.width
-            let outline = model.visibleTextBoxes.reduce(Path()) { path, r in
+            let visible = model.visibleTextBoxes
+            let boxes = visible.boxes.reduce(Path()) { path, r in
                 let box = CGRect(
                     x: shown.minX + r.minX * s, y: shown.minY + (videoSize.height - r.maxY) * s,
                     width: r.width * s, height: r.height * s)
                 // Widened by a point so boxes a hair apart join too.
                 return path.union(Path(roundedRect: box.insetBy(dx: -1, dy: -1), cornerRadius: 3))
+            }
+            let outline = visible.codes.reduce(boxes) { path, q in
+                var quad = Path()
+                quad.addLines(q.map { CGPoint(x: shown.minX + $0.x * s, y: shown.minY + (videoSize.height - $0.y) * s) })
+                quad.closeSubpath()
+                return path.union(quad)
             }
             outline.stroke(Color.orange, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
         }

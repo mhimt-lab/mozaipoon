@@ -9,6 +9,7 @@ extension TextKind {
         case .url: "URL"
         case .address: "住所・郵便番号"
         case .name: "人の名前"
+        case .qr: "QRコード"
         }
     }
     /// One line under the label; the details are in the help tag.
@@ -19,6 +20,7 @@ extension TextKind {
         case .url: "https://・www. で始まるもの、.com・.jp などで終わるもの"
         case .address: "〒や「〜県〜市」「〜区1-2-3」。行の終わりと、すぐ下の行も"
         case .name: "よくある名字と、続く名前や「さん」など。ほかの名前は「隠す言葉」へ"
+        case .qr: "LINEの友だち追加・支払いなどのQRコード"
         }
     }
     var detail: String {
@@ -28,6 +30,7 @@ extension TextKind {
         case .url: "https:// や www. で始まる文字と、.com・.jp などで終わる文字を隠します。"
         case .address: "〒や「〜県〜市」「〜区〜1-2-3」の形の文字を、見つかった所から行の終わりまでと、すぐ下に続く行（建物名・部屋番号）も隠します。"
         case .name: "よくある名字に、名前や「さん」などが続く文字（「山田 花子」「田中さん」）を隠します。珍しい名字・ニックネーム・名前だけの呼びかけは見つからないので、「隠す言葉」に入れてください。"
+        case .qr: "QRコード全体を隠します。LINEの友だち追加や支払いのQRコードは、読み取るだけでアカウントにたどり着けます。小さすぎる・ぼやけている・一部が隠れているコードは見つからないことがあります。"
         }
     }
     var shortLabel: String {
@@ -37,6 +40,7 @@ extension TextKind {
         case .url: "URL"
         case .address: "住所"
         case .name: "名前"
+        case .qr: "QR"
         }
     }
 }

@@ -208,7 +208,7 @@ func selfCheckCover() -> [String] {
         var render = RenderSettings()
         render.stickers = [1: s]
         let out = applyCover(
-            checker, rects: [], stickers: [StickerBox(rect: CGRect(x: 150, y: 150, width: 100, height: 100), person: 1, estimated: false)],
+            checker, rects: [], stickers: [StickerBox(rect: CGRect(x: 150, y: 150, width: 100, height: 100), person: 1, estimated: false, angle: 0)],
             render: render, block: 20)
         var px = [UInt8](repeating: 0, count: 4 * 4 * 4)
         CIContext().render(out, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: 198, y: 198, width: 4, height: 4),
@@ -259,5 +259,29 @@ func selfCheckCover() -> [String] {
     }
     let blockSpread = (blockValues.max() ?? 0) - (blockValues.min() ?? 0)
     expect(blockSpread <= 12, "mosaic block stays steady while thin strokes move: values \(blockValues)")
+
+    // Sticker tilt: the measured tilt wobbles ±3° between measurements; the sticker must not.
+    // Frames 0–59 on screen at 10° ± 3° (measured every third frame), then off screen.
+    let tiltBoxes: [CGRect?] = (0..<80).map { $0 < 60 ? CGRect(x: 100, y: 100, width: 50, height: 50) : nil }
+    let degree = CGFloat.pi / 180
+    let tiltIn: [CGFloat?] = (0..<80).map { f in f < 60 && f % 3 == 0 ? (10 + (f % 6 == 0 ? 3 : -3)) * degree : nil }
+    let tilt = steadyAngles(tiltBoxes, tiltIn, fps: 30)
+    let middle = tilt[15..<45].map { $0 / degree }
+    expect(middle.allSatisfy { abs($0 - 10) <= 1 }, "sticker tilt is steady: \(middle.map { Int($0.rounded()) })")
+    expect(tilt[60...].allSatisfy { $0 == 0 }, "no tilt off screen")
+    expect(tilt[0] / degree > 6 && tilt[0] / degree < 14, "tilt at the start of a run is not pulled away: \(tilt[0] / degree)")
+    // A square sticker turned 45° over a face box: the corner of the upright square is
+    // background, a point straight above the middle beyond the upright square is sticker.
+    if let square = image({ $0.fill(CGRect(x: 0, y: 0, width: 200, height: 200)) }), let s = try? Sticker(cgImage: square) {
+        let turned = s.drawn(over: CGRect(x: 150, y: 150, width: 100, height: 100), scale: 1, angle: .pi / 4)
+            .composited(over: CIImage(color: .black).cropped(to: CGRect(x: 0, y: 0, width: 400, height: 400)))
+        func red(_ x: CGFloat, _ y: CGFloat) -> Int {
+            var px = [UInt8](repeating: 0, count: 4)
+            CIContext().render(turned, toBitmap: &px, rowBytes: 4, bounds: CGRect(x: x, y: y, width: 1, height: 1),
+                               format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+            return Int(px[0])
+        }
+        expect(red(153, 153) < 30 && red(200, 262) > 200, "sticker turns with the face: corner \(red(153, 153)), above \(red(200, 262))")
+    } else { failures.append("square sticker could not be made") }
     return failures
 }

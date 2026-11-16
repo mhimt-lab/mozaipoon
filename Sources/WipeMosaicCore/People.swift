@@ -8,6 +8,8 @@ public struct Detection: Sendable {
     /// true when the face detector missed this frame and the box comes from following the
     /// head region (object tracking), e.g. a profile view during fast motion.
     public var tracked = false
+    /// Tilt of the face (see `FaceBox.angle`); measured on some frames only, nil on the others.
+    public var angle: CGFloat? = nil
 }
 
 /// One continuous appearance of a face.
@@ -49,6 +51,24 @@ public struct FaceTrack: Sendable {
             if detections[mid].frame < f { lo = mid + 1 } else { hi = mid }
         }
         return lo
+    }
+
+    /// The tilt for every frame of `span` (index 0 = first frame): interpolated between the
+    /// frames where it was measured and held before the first and after the last; nil when it
+    /// was never measured in this track.
+    func angles() -> [CGFloat?] {
+        let known = detections.compactMap { d in d.angle.map { (frame: d.frame, angle: $0) } }
+        let lo = span.lowerBound
+        guard let first = known.first, let last = known.last else { return Array(repeating: nil, count: span.count) }
+        var out = [CGFloat?](repeating: nil, count: span.count)
+        for f in lo...first.frame { out[f - lo] = first.angle }
+        for f in last.frame...span.upperBound { out[f - lo] = last.angle }
+        for (a, b) in zip(known, known.dropFirst()) where b.frame > a.frame {
+            for f in a.frame...b.frame {
+                out[f - lo] = a.angle + (b.angle - a.angle) * CGFloat(f - a.frame) / CGFloat(b.frame - a.frame)
+            }
+        }
+        return out
     }
 
     /// Box at frame `f`, linearly interpolated between detections; nil outside the track.
@@ -130,9 +150,17 @@ public struct VideoFaces: Sendable {
         // The best box per selected person and frame, with its priority: 0 detected face,
         // 1 followed by tracking, 2 bridge between two appearances, 3 held position.
         var best: [Int: [(rect: CGRect, rank: Int)?]] = [:]
-        for p in selected { best[p] = Array(repeating: nil, count: n) }
-        func add(_ r: CGRect, person: Int, frame f: Int, rank: Int) {
-            guard let cur = best[person]![f] else { return best[person]![f] = (r, rank) }
+        // The tilt of the face in the box chosen in `best` (nil: not measured).
+        var bestAngle: [Int: [CGFloat?]] = [:]
+        for p in selected {
+            best[p] = Array(repeating: nil, count: n)
+            bestAngle[p] = Array(repeating: nil, count: n)
+        }
+        func add(_ r: CGRect, person: Int, frame f: Int, rank: Int, angle: CGFloat?) {
+            guard let cur = best[person]![f] else {
+                bestAngle[person]![f] = angle
+                return best[person]![f] = (r, rank)
+            }
             // The other box (a held position next to the face, or two held positions of one
             // person far apart) stays mosaicked as it is rather than being merged into a box
             // that would cover both.
@@ -140,7 +168,14 @@ public struct VideoFaces: Sendable {
             // whose branches are tuples with and without labels.
             let win: (rect: CGRect, rank: Int)
             let lose: CGRect
-            if rank < cur.rank { win = (r, rank); lose = cur.rect } else { win = cur; lose = r }
+            if rank < cur.rank {
+                win = (r, rank)
+                lose = cur.rect
+                bestAngle[person]![f] = angle
+            } else {
+                win = cur
+                lose = r
+            }
             best[person]![f] = win
             if !win.rect.contains(lose) { mosaic[f].append(lose) }
         }
@@ -149,33 +184,46 @@ public struct VideoFaces: Sendable {
             let person = owner[t.id] ?? -1
             let isSelected = selected.contains(person)
             if isSelected { selectedTracks[person, default: []].append(t) }
+            let angles = isSelected && stickered.contains(person) ? t.angles() : []
             for f in t.span {
                 guard let r = t.rect(atFrame: f) else { continue }
                 guard isSelected else { other[f].append(r); continue }
                 let box = t.isTracked(atFrame: f) ? scaled(r, 1.25) : r
-                add(box, person: person, frame: f, rank: t.isEstimated(atFrame: f, maxGap: estimateGap) ? 1 : 0)
+                add(box, person: person, frame: f, rank: t.isEstimated(atFrame: f, maxGap: estimateGap) ? 1 : 0,
+                    angle: angles.isEmpty ? nil : angles[f - t.span.lowerBound])
             }
         }
         for (person, ts) in selectedTracks {
             let ordered = ts.sorted { $0.span.lowerBound < $1.span.lowerBound }
+            let sticker = stickered.contains(person)
+            let angles = ordered.map { sticker ? $0.angles() : [] }
             for (k, t) in ordered.enumerated() {
+                let firstAngle = angles[k].first ?? nil, lastAngle = angles[k].last ?? nil
                 // Bridge to this person's next track if it starts soon after this one ends.
                 if k + 1 < ordered.count {
                     let next = ordered[k + 1]
                     let a = t.span.upperBound, b = next.span.lowerBound
                     if b - a > 1 && b - a - 1 <= bridgeFrames {
                         let ra = t.lastRect, rb = next.detections.first!.rect
+                        let aa = lastAngle, ab = angles[k + 1].first ?? nil
                         for f in (a + 1)..<b {
-                            add(scaled(lerp(ra, rb, CGFloat(f - a) / CGFloat(b - a)), 1.3), person: person, frame: f, rank: 2)
+                            let w = CGFloat(f - a) / CGFloat(b - a)
+                            var angle = aa ?? ab
+                            if let aa, let ab { angle = aa + (ab - aa) * w }
+                            add(scaled(lerp(ra, rb, w), 1.3), person: person, frame: f, rank: 2, angle: angle)
                         }
                     }
                 }
                 guard holdFrames > 0 else { continue }
                 let first = t.detections.first!.rect
-                for f in max(0, t.span.lowerBound - holdFrames)..<t.span.lowerBound { add(first, person: person, frame: f, rank: 3) }
+                for f in max(0, t.span.lowerBound - holdFrames)..<t.span.lowerBound {
+                    add(first, person: person, frame: f, rank: 3, angle: firstAngle)
+                }
                 let last = t.lastRect
                 if t.span.upperBound + 1 < n {
-                    for f in (t.span.upperBound + 1)...min(n - 1, t.span.upperBound + holdFrames) { add(last, person: person, frame: f, rank: 3) }
+                    for f in (t.span.upperBound + 1)...min(n - 1, t.span.upperBound + holdFrames) {
+                        add(last, person: person, frame: f, rank: 3, angle: lastAngle)
+                    }
                 }
             }
         }
@@ -185,10 +233,11 @@ public struct VideoFaces: Sendable {
                 boxes.map { $0?.rect }, centreFrames: max(1, Int((0.25 * fps).rounded())),
                 sizeFrames: max(1, Int((0.5 * fps).rounded())), marginFrames: max(1, Int((0.25 * fps).rounded())))
             let sticker = stickered.contains(person)
+            let angles = sticker ? steadyAngles(steady, bestAngle[person]!, fps: fps) : []
             for f in 0..<n {
                 guard let r = steady[f] else { continue }
                 if sticker {
-                    stickers[f].append(StickerBox(rect: r, person: person, estimated: (boxes[f]?.rank ?? 0) > 0))
+                    stickers[f].append(StickerBox(rect: r, person: person, estimated: (boxes[f]?.rank ?? 0) > 0, angle: angles[f]))
                 } else {
                     mosaic[f].append(r)
                 }
@@ -291,7 +340,7 @@ private func median(_ v: [Float]) -> Float? {
 /// mosaic — continues through a turn of the head instead of breaking into a new person.
 public func analyzeFaces(
     asset: AVURLAsset, info: VideoInfo, tiles: Int, tileInterval: Double = 0.1, maxGap: Double = 0.5,
-    maxTracking: Double = 5, mergeThreshold: Float = 0.45, similarThreshold: Float = 0.6,
+    maxTracking: Double = 5, mergeThreshold: Float = 0.45, similarThreshold: Float = 0.6, angleInterval: Double = 0.1,
     progress: (Int) -> Void
 ) throws -> VideoFaces {
     var times: [Double] = []
@@ -305,7 +354,10 @@ public func analyzeFaces(
     var trackedRun: [Int: Int] = [:]  // consecutive tracked frames; maxTrackedFrames = gave up
     var previous: CIImage?
 
-    try forEachFrameDetecting(asset: asset, info: info, tiles: tiles, tileInterval: tileInterval, extraRegions: []) { i, t, img, faces in
+    try forEachFrameDetecting(
+        asset: asset, info: info, tiles: tiles, tileInterval: tileInterval, extraRegions: [], angleInterval: angleInterval
+    ) { i, t, img, boxes in
+        let faces = boxes.map(\.rect)
         times.append(t)
         active.removeAll { i - tracks[$0].lastFrame > gapFrames }
 
@@ -337,7 +389,7 @@ public func analyzeFaces(
                 ti = tracks.count - 1
                 active.append(ti)
             }
-            tracks[ti].detections.append(Detection(frame: i, rect: f))
+            tracks[ti].detections.append(Detection(frame: i, rect: f, angle: boxes[fi].angle))
             let tr = tracks[ti]
             if tr.appearance.count < maxSamples, tr.lastSample.map { i - $0 >= sampleEvery } ?? true, min(f.width, f.height) >= 24,
                 let a = try? faceSignature(in: img, face: f, kind: .appearance),

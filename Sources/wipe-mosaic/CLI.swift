@@ -109,7 +109,7 @@ func runMosaic(_ o: RunOptions) async throws {
         for f in frames {
             let boxes = f.mosaic.map { String(format: "%.0f:%.0f:%.0f:%.0f", $0.minX, h - $0.maxY, $0.width, $0.height) }
             csv += String(format: "%.3f,%d,%d,", f.time, f.mosaic.count, f.kept.count) + boxes.joined(separator: " ")
-                + ",\(f.exact.count),"
+                + ",\(f.exact.count + f.codes.count),"
                 + f.stickers.map {
                     // Last field 1: face estimated in this frame, a mosaic is drawn under the sticker.
                     String(format: "%d:%.0f:%.0f:%.0f:%.0f:%d", $0.person, $0.rect.minX, h - $0.rect.maxY, $0.rect.width,
@@ -129,7 +129,7 @@ func runMosaic(_ o: RunOptions) async throws {
           frames with mosaicked faces:  \(frames.filter { !$0.mosaic.isEmpty }.count) (max \(frames.map(\.mosaic.count).max() ?? 0) per frame)
           frames with sticker faces:    \(frames.filter { !$0.stickers.isEmpty }.count)
           frames with other faces:      \(frames.filter { !$0.kept.isEmpty }.count)
-          frames with hidden text:      \(frames.filter { !$0.exact.isEmpty }.count)
+          frames with hidden text:      \(frames.filter(\.hidesText).count)
         \(extra)  possible misses (count dips): \(dips.count)\(dips.prefix(10).map { String(format: " %.2fs", $0.start) }.joined())
         Review the output before publishing: detection can miss faces.
         """)
@@ -240,7 +240,7 @@ func listText(input: URL, options: TextMaskOptions, list: Bool) async throws {
         print("  \(k.rawValue): \(text.entries.filter { $0.kinds.contains(k) }.count) lines")
     }
     print("  hidden with these options: \(mask.hidden.count) lines, word hits: \(mask.wordHits.count)")
-    print("  frames with hidden text: \(mask.frames.filter { !$0.isEmpty }.count)")
+    print("  frames with hidden text: \(zip(mask.frames, mask.codes).filter { !$0.isEmpty || !$1.isEmpty }.count)")
     guard list else { return }
     for e in text.entries {
         let kinds = e.kinds.map(\.rawValue).sorted().joined(separator: ",")

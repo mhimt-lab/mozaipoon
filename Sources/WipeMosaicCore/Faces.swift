@@ -20,37 +20,54 @@ public struct FrameFaces: Sendable {
     public let exact: [CGRect]
     /// For each of `exact`, the corner its mosaic blocks line up with (empty: each box's own).
     public let exactAnchors: [CGPoint]
+    /// QR codes to mosaic along their four corners (margin included; see `TextMask.codes`).
+    public let codes: [[CGPoint]]
     /// Faces covered by a person's sticker instead of the mosaic (not in `mosaic`).
     public let stickers: [StickerBox]
     public init(
         time: Double, mosaic: [CGRect], kept: [CGRect], exact: [CGRect] = [], exactAnchors: [CGPoint] = [],
-        stickers: [StickerBox] = []
+        codes: [[CGPoint]] = [], stickers: [StickerBox] = []
     ) {
         self.time = time
         self.mosaic = mosaic
         self.kept = kept
         self.exact = exact
         self.exactAnchors = exactAnchors
+        self.codes = codes
         self.stickers = stickers
     }
 
     /// Faces hidden in this frame, by mosaic or sticker.
     public var faceCount: Int { mosaic.count + stickers.count }
     /// Something is hidden in this frame.
-    public var hidesAnything: Bool { !mosaic.isEmpty || !exact.isEmpty || !stickers.isEmpty }
+    public var hidesAnything: Bool { !mosaic.isEmpty || !exact.isEmpty || !codes.isEmpty || !stickers.isEmpty }
+    /// On-screen text or a QR code is hidden in this frame.
+    public var hidesText: Bool { !exact.isEmpty || !codes.isEmpty }
 }
 
 private func area(_ r: CGRect) -> CGFloat { r.isNull ? 0 : r.width * r.height }
 
-/// Detect faces in one region; returns rects in the image's coordinates.
-private func detect(in image: CIImage, region: CGRect) throws -> [CGRect] {
+/// One detected face: its box (image coordinates) and the head pose Vision reports (radians;
+/// nil when not reported). `angle` is filled in by `faceAngles` on some frames.
+public struct FaceBox: Sendable {
+    public var rect: CGRect
+    var roll: Double?
+    var yaw: Double?
+    /// Tilt of the face, counter-clockwise in Core Image coordinates (radians); nil when not measured.
+    public var angle: CGFloat?
+}
+
+/// Detect faces in one region; returns boxes in the image's coordinates.
+private func detect(in image: CIImage, region: CGRect) throws -> [FaceBox] {
     let crop = image.cropped(to: region)
         .transformed(by: CGAffineTransform(translationX: -region.minX, y: -region.minY))
     let req = VNDetectFaceRectanglesRequest()
     try VNImageRequestHandler(ciImage: crop, orientation: .up, options: [:]).perform([req])
     return (req.results ?? []).map {
-        VNImageRectForNormalizedRect($0.boundingBox, Int(region.width), Int(region.height))
-            .offsetBy(dx: region.minX, dy: region.minY)
+        FaceBox(
+            rect: VNImageRectForNormalizedRect($0.boundingBox, Int(region.width), Int(region.height))
+                .offsetBy(dx: region.minX, dy: region.minY),
+            roll: $0.roll?.doubleValue, yaw: $0.yaw?.doubleValue)
     }
 }
 
@@ -72,17 +89,19 @@ private func tileRects(_ ext: CGRect, tiles: Int) -> [CGRect] {
     return out
 }
 
-/// Merge boxes that describe the same face (from full frame and tiles) into their union.
-private func mergeDuplicates(_ rects: [CGRect]) -> [CGRect] {
-    var merged: [CGRect] = []
-    for r in rects.sorted(by: { area($0) > area($1) }) {
+/// Merge boxes that describe the same face (from full frame and tiles) into their union
+/// (the pose of the largest box is kept).
+private func mergeDuplicates(_ faces: [FaceBox]) -> [FaceBox] {
+    var merged: [FaceBox] = []
+    for f in faces.sorted(by: { area($0.rect) > area($1.rect) }) {
+        let r = f.rect
         if let i = merged.firstIndex(where: {
-            let inter = area($0.intersection(r))
-            return inter > 0 && inter / min(area($0), area(r)) >= 0.5
+            let inter = area($0.rect.intersection(r))
+            return inter > 0 && inter / min(area($0.rect), area(r)) >= 0.5
         }) {
-            merged[i] = merged[i].union(r)
+            merged[i].rect = merged[i].rect.union(r)
         } else {
-            merged.append(r)
+            merged.append(f)
         }
     }
     return merged
@@ -92,6 +111,11 @@ private func mergeDuplicates(_ rects: [CGRect]) -> [CGRect] {
 /// Wipes get their own pass because a second person inside the wipe is the case where
 /// a miss would leave someone other than the presenter unmasked.
 public func detectFaces(image: CIImage, tiles: Int, extraRegions: [CGRect]) throws -> [CGRect] {
+    try detectFaceBoxes(image: image, tiles: tiles, extraRegions: extraRegions).map(\.rect)
+}
+
+/// `detectFaces` with the head pose of each face.
+func detectFaceBoxes(image: CIImage, tiles: Int, extraRegions: [CGRect]) throws -> [FaceBox] {
     let ext = image.extent
     var regions = [ext] + tileRects(ext, tiles: tiles)
     for r in extraRegions {
@@ -99,11 +123,64 @@ public func detectFaces(image: CIImage, tiles: Int, extraRegions: [CGRect]) thro
         if !e.isNull && !e.isEmpty { regions.append(e) }
     }
     // Each Vision request mostly waits on the Neural Engine/GPU, so run the regions concurrently.
-    let results = ResultBox<[CGRect]>(count: regions.count)
+    let results = ResultBox<[FaceBox]>(count: regions.count)
     DispatchQueue.concurrentPerform(iterations: regions.count) { i in
         results.set(i, Result { try detect(in: image, region: regions[i]) })
     }
     return mergeDuplicates(try results.values().flatMap { $0 })
+}
+
+/// The tilt of each face (see `FaceBox.angle`; nil when it cannot be measured).
+/// Vision's roll comes with every face but measured only about half of a tilt to one side
+/// (a frame turned +20°: roll +5…+13°; −20°: −16…−20°), while the line through the eyes
+/// followed both sides within ~2° (街角の3人, 2026-11-16). The eye line goes wrong on a face
+/// turned to the side (one eye hidden, perspective: −17° where roll said −3°, at yaw 27°),
+/// so it is used on faces turned less than 15°, roll beyond 30°, and a mix in between so the
+/// value does not jump as the head turns. Faces under 40 px get roll only (landmarks unreliable).
+func faceAngles(in image: CIImage, faces: [FaceBox]) -> [CGFloat?] {
+    let ext = image.extent
+    let degree = Double.pi / 180
+    var eyes = [Double?](repeating: nil, count: faces.count)
+    let candidates = faces.indices.filter { faces[$0].rect.width >= 40 && abs(faces[$0].yaw ?? 0) < 30 * degree }
+    if !candidates.isEmpty {
+        let inputs = candidates.map { i -> VNFaceObservation in
+            let r = faces[i].rect
+            let norm = CGRect(
+                x: (r.minX - ext.minX) / ext.width, y: (r.minY - ext.minY) / ext.height,
+                width: r.width / ext.width, height: r.height / ext.height)
+            return VNFaceObservation(
+                requestRevision: VNDetectFaceRectanglesRequestRevision3, boundingBox: norm,
+                roll: faces[i].roll.map { NSNumber(value: $0) }, yaw: faces[i].yaw.map { NSNumber(value: $0) })
+        }
+        let req = VNDetectFaceLandmarksRequest()
+        req.inputFaceObservations = inputs
+        if (try? VNImageRequestHandler(ciImage: image, orientation: .up, options: [:]).perform([req])) != nil {
+            for o in req.results ?? [] {
+                // The result for each input face: the one whose box is nearest.
+                guard let k = inputs.indices.min(by: {
+                    hypot(inputs[$0].boundingBox.midX - o.boundingBox.midX, inputs[$0].boundingBox.midY - o.boundingBox.midY)
+                        < hypot(inputs[$1].boundingBox.midX - o.boundingBox.midX, inputs[$1].boundingBox.midY - o.boundingBox.midY)
+                }) else { continue }
+                let size = CGSize(width: ext.width, height: ext.height)
+                func centre(_ region: VNFaceLandmarkRegion2D?) -> CGPoint? {
+                    guard let p = region?.pointsInImage(imageSize: size), !p.isEmpty else { return nil }
+                    return CGPoint(x: p.map(\.x).reduce(0, +) / CGFloat(p.count), y: p.map(\.y).reduce(0, +) / CGFloat(p.count))
+                }
+                guard let a = centre(o.landmarks?.leftEye), let b = centre(o.landmarks?.rightEye) else { continue }
+                var angle = atan2(Double(b.y - a.y), Double(b.x - a.x))
+                // The line through the eyes, whichever way round the eyes are listed.
+                if angle > .pi / 2 { angle -= .pi } else if angle < -.pi / 2 { angle += .pi }
+                eyes[candidates[k]] = angle
+            }
+        }
+    }
+    return faces.indices.map { i in
+        let f = faces[i]
+        guard let roll = f.roll else { return eyes[i].map { CGFloat($0) } }
+        guard let eye = eyes[i], abs(eye - roll) <= 25 * degree else { return CGFloat(roll) }
+        let w = min(1, max(0, (30 * degree - abs(f.yaw ?? 0)) / (15 * degree)))
+        return CGFloat(w * eye + (1 - w) * roll)
+    }
 }
 
 /// Convert a top-left-origin rect (player coordinates) to Core Image coordinates.

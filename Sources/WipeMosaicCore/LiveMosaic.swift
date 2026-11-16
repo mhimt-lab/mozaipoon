@@ -31,21 +31,22 @@ public final class LiveMosaic: @unchecked Sendable {
             let rects = enabled
                 ? index.faceRects(at: t, hold: render.hold, pad: render.pad).map { $0.offsetBy(dx: origin.x, dy: origin.y) }
                 : []
-            var text: [CGRect] = [], textAnchors: [CGPoint] = []
+            var text: [CGRect] = [], textAnchors: [CGPoint] = [], codes: [[CGPoint]] = []
             if enabled {
                 let exact = index.exactRects(at: t)
                 text = exact.rects.map { $0.offsetBy(dx: origin.x, dy: origin.y) }
                 textAnchors = exact.anchors.map { CGPoint(x: $0.x + origin.x, y: $0.y + origin.y) }
+                codes = exact.codes.map { $0.map { CGPoint(x: $0.x + origin.x, y: $0.y + origin.y) } }
             }
             let stickers = enabled
                 ? index.stickerBoxes(at: t).map { $0.offsetBy(dx: origin.x, dy: origin.y) }
                 : []
-            guard !rects.isEmpty || !text.isEmpty || !stickers.isEmpty else {
+            guard !rects.isEmpty || !text.isEmpty || !codes.isEmpty || !stickers.isEmpty else {
                 request.finish(with: source, context: nil)
                 return
             }
             let out = applyCover(
-                source, rects: rects, text: text, textAnchors: textAnchors, stickers: stickers, render: render,
+                source, rects: rects, text: text, textAnchors: textAnchors, codes: codes, stickers: stickers, render: render,
                 block: render.blockSize(for: source.extent.size))
             request.finish(with: out, context: nil)
         }
