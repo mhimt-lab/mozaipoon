@@ -140,7 +140,10 @@ public struct TextTrack: Sendable {
     func tiltSlack(atFrame f: Int, times: [Double]) -> CGFloat {
         guard isTilted else { return 0 }
         if f < first || f > last {
-            let k = f < first ? 0 : samples.count - 1, j = f < first ? min(1, samples.count - 1) : max(0, samples.count - 2)
+            let k = f < first ? 0 : samples.count - 1
+            // Read once: no turn measured, and no interval to continue it by.
+            guard samples.count > 1 else { return tiltSlacks[k] }
+            let j = f < first ? 1 : samples.count - 2
             return tiltSlacks[k] + abs(tilts[k] - tilts[j]) * extensionFactor(atFrame: f, times: times)
         }
         let lo = sampleIndex(atOrAfter: f)
@@ -2108,6 +2111,11 @@ func selfCheckMask() -> [String] {
     // The slant read 0.6° too steep: the height found from the box shrinks by about a third,
     // and the ends of the long line turn 4 px off its axis; the measured height and the slack
     // of the slant keep them in.
+    // A slanted line read only once is continued before and after it (it crashed: the turn
+    // between the last two readings was looked up).
+    let readOnce = slantedSamples([(10, CGPoint(x: 500, y: 500))])
+    let onceMask = screen([readOnce]).mask(numbers)
+    expect(readOnce.isTilted && onceMask.slanted[11].count == 1 && onceMask.slanted[9].count == 1, "slanted: a line read once is hidden around it")
     let steep = slantedSamples([(0, CGPoint(x: 500, y: 500)), (15, CGPoint(x: 500, y: 500)), (30, CGPoint(x: 500, y: 500))],
                                length: 800, readAt: 20.6)
     let steepMask = screen([steep]).mask(numbers)
