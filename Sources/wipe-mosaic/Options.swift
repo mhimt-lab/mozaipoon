@@ -10,7 +10,7 @@ struct CommonOptions {
     var people: Set<Int> = []
     /// Screen-text mode: hide personal information in on-screen text.
     var screenText = false
-    var textKinds: Set<TextKind> = Set(TextKind.allCases)
+    var textKinds: Set<TextKind> = defaultTextKinds
     var textWords: [String] = []
     var textLines: Set<Int> = []
     var textAll = false
@@ -84,7 +84,7 @@ let usage = """
       --tiles <n>          Also detect on an n x n grid for small faces (default: people 4, wipe 3; 1 = off)
       --hold <seconds>     Keep the mosaic before/after a face is seen (default: people 1.0, wipe 0.3)
       --tile-interval <s>  People: tile passes only every <s> seconds (default 0.1; 0 = every frame)
-      --text-kinds <list>  Screen text: kinds to hide, from number,email,url,address,name,plate,qr (default all; none = off)
+      --text-kinds <list>  Screen text: kinds to hide, from number,email,url,address,name,plate,qr (default all but plate; none = off)
       --words <list>       Screen text: also hide these words, comma-separated (e.g. a name)
       --lines <list>       Screen text: hide these lines whole (numbers from `wipe-mosaic text --list`)
       --all-text           Screen text: hide every line that was read (a device screen filmed with a camera)

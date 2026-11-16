@@ -53,6 +53,9 @@ struct TextReading {
     let width: Int
     let height: Int
     let observations: [VNRecognizedTextObservation]
+    /// Large frames read again in parts for plates (`plateTiles`): each part's rectangle (in
+    /// pixels of the frame, bottom-left origin) and its observations (normalized in the part).
+    var tiles: [(rect: CGRect, observations: [VNRecognizedTextObservation])] = []
     /// Corners of the QR codes (top left, top right, bottom right, bottom left of the code),
     /// in pixels of the frame (bottom-left origin).
     let codes: [[CGPoint]]
@@ -60,18 +63,19 @@ struct TextReading {
 
 private struct StopDecoding: Error {}
 
-/// Reads "job frame deep" lines from stdin (frames in increasing order), recognizes each frame and
-/// writes the results to stdout: job, frame, the frame's time (the bits of the Double), width,
-/// height and byte count (Int64 each, little endian), then the archived text observations and
-/// QR code corners (an array of the observations and the corners' numbers, 8 per code).
+/// Reads "job frame flags" lines from stdin (frames in increasing order; flags 1 = deep, 2 = also
+/// in parts), recognizes each frame and writes the results to stdout: job, frame, the frame's time
+/// (the bits of the Double), width, height and byte count (Int64 each, little endian), then the
+/// archive of the text observations, the QR code corners' numbers (8 per code), the parts'
+/// observation arrays and the parts' rectangles' numbers (4 per part).
 private func textWorkerMain(video: URL) throws {
     let asset = AVURLAsset(url: video)
     let info = try waitFor { try await loadVideo(asset) }
-    func next() throws -> (job: Int, frame: Int, deep: Bool)? {
+    func next() throws -> (job: Int, frame: Int, deep: Bool, tiles: Bool)? {
         guard let line = readLine() else { return nil }
         let parts = line.split(separator: " ").compactMap { Int($0) }
         guard parts.count == 3 else { throw ToolError("bad request: \(line)") }
-        return (parts[0], parts[1], parts[2] != 0)
+        return (parts[0], parts[1], parts[2] & 1 != 0, parts[2] & 2 != 0)
     }
     var target = try next()
     guard target != nil else { return }
@@ -79,10 +83,12 @@ private func textWorkerMain(video: URL) throws {
     do {
         try forEachFrame(asset: asset, info: info) { i, time, image in
             while let t = target, t.frame == i {
-                let reading = try recognizeText(image, frame: i, time: time, deep: t.deep)
+                let reading = try recognizeText(image, frame: i, time: time, deep: t.deep, tiles: t.tiles)
                 let boxes = reading.codes.flatMap { $0.flatMap { [NSNumber(value: Double($0.x)), NSNumber(value: Double($0.y))] } }
+                let tileRects = reading.tiles.flatMap { t in [t.rect.minX, t.rect.minY, t.rect.width, t.rect.height].map { NSNumber(value: Double($0)) } }
                 let data = try NSKeyedArchiver.archivedData(
-                    withRootObject: [reading.observations, boxes] as NSArray, requiringSecureCoding: true)
+                    withRootObject: [reading.observations, boxes, reading.tiles.map { $0.observations } as NSArray, tileRects] as NSArray,
+                    requiringSecureCoding: true)
                 var header = Data()
                 for v in [t.job, t.frame, Int(Int64(bitPattern: time.bitPattern)), reading.width, reading.height, data.count] {
                     withUnsafeBytes(of: Int64(v).littleEndian) { header.append(contentsOf: $0) }
@@ -172,10 +178,10 @@ final class TextWorkerPool: @unchecked Sendable {
     deinit { terminate() }
 
     /// Asks the next worker in turn to read `frame` as `job`. Frames must increase.
-    func submit(job: Int, frame: Int, deep: Bool) throws {
+    func submit(job: Int, frame: Int, deep: Bool, tiles: Bool) throws {
         let k = job % inputs.count
         do {
-            try inputs[k].write(contentsOf: Data("\(job) \(frame) \(deep ? 1 : 0)\n".utf8))
+            try inputs[k].write(contentsOf: Data("\(job) \(frame) \((deep ? 1 : 0) | (tiles ? 2 : 0))\n".utf8))
         } catch {
             throw ToolError(state.withLock { workerFailure(k) ?? "文字を読み取る処理 \(k + 1) が途中で止まりました（\(error)）" })
         }
@@ -245,16 +251,22 @@ final class TextWorkerPool: @unchecked Sendable {
                 // nested time range, so it is decoded without it.
                 let u = try NSKeyedUnarchiver(forReadingFrom: body)
                 u.requiresSecureCoding = false
-                guard let root = u.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? [Any], root.count == 2,
-                    let obs = root[0] as? [VNRecognizedTextObservation], let numbers = root[1] as? [NSNumber], numbers.count % 8 == 0
+                guard let root = u.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? [Any], root.count == 4,
+                    let obs = root[0] as? [VNRecognizedTextObservation], let numbers = root[1] as? [NSNumber], numbers.count % 8 == 0,
+                    let tileObs = root[2] as? [[VNRecognizedTextObservation]], let tileNumbers = root[3] as? [NSNumber],
+                    tileNumbers.count == 4 * tileObs.count
                 else {
                     throw ToolError("unreadable result for frame \(v[1])")
                 }
                 let n = numbers.map { CGFloat($0.doubleValue) }
                 let codes = stride(from: 0, to: n.count, by: 8).map { k in (0..<4).map { CGPoint(x: n[k + 2 * $0], y: n[k + 2 * $0 + 1]) } }
+                let tn = tileNumbers.map { CGFloat($0.doubleValue) }
+                let tiles = tileObs.indices.map { k in
+                    (rect: CGRect(x: tn[4 * k], y: tn[4 * k + 1], width: tn[4 * k + 2], height: tn[4 * k + 3]), observations: tileObs[k])
+                }
                 let reading = TextReading(
                     frame: Int(v[1]), time: Double(bitPattern: UInt64(bitPattern: v[2])), width: Int(v[3]), height: Int(v[4]),
-                    observations: obs, codes: codes)
+                    observations: obs, tiles: tiles, codes: codes)
                 state.withLock {
                     results[Int(v[0])] = reading
                     state.broadcast()
