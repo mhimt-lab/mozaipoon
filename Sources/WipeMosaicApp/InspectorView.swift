@@ -256,6 +256,8 @@ private struct PersonRow: View {
                 }
                 .buttonStyle(.borderless)
                 .help("この人が映る次の場面へ移動します")
+                // Each person's own name: VoiceOver read "次の場面へ" once a person.
+                .accessibilityLabel("人物 \(person.id) が映る次の場面へ")
             }
             if on {
                 CoverMenu(model: model, video: video, person: person.id)
@@ -712,6 +714,7 @@ private struct CoverMenu: View {
         .controlSize(.small)
         .fixedSize()
         .help("基本の隠し方（モザイクかぼかし）の代わりに、好きな画像（顔の写真など）をこの人の顔に重ねられます")
+        .accessibilityLabel("人物 \(person) の隠し方：\(current == nil ? styleName : "スタンプ")")
     }
 
     /// A menu item image: AppKit menus draw an NSImage at its own size.

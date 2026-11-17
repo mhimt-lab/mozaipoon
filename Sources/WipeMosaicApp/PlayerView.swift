@@ -486,26 +486,37 @@ private struct TransportBar: View {
 
     private func controls(time: Bool, frame: Bool) -> some View {
         HStack(spacing: 12) {
-            Button {
-                model.step(-1)
-            } label: {
-                Label("1コマ戻る", systemImage: "backward.frame.fill").labelStyle(.iconOnly)
+            // The three as one group, closer to each other than to the timeline. Held down, the
+            // step buttons go on stepping (as the arrow keys do).
+            HStack(spacing: 2) {
+                Button {
+                    model.step(-1)
+                } label: {
+                    Label("1コマ戻る", systemImage: "backward.frame.fill").labelStyle(.iconOnly)
+                }
+                .buttonRepeatBehavior(.enabled)
+                .transportButton(model, "back")
+                .help("1コマ戻る（←。⇧←で1秒戻る。押し続けると戻り続けます）")
+                Button {
+                    model.togglePlay()
+                } label: {
+                    // The play mark turns into the pause mark, not one swapped for the other.
+                    Label(model.isPlaying ? "一時停止" : "再生", systemImage: model.isPlaying ? "pause.fill" : "play.fill")
+                        .labelStyle(.iconOnly)
+                        .contentTransition(.symbolEffect(.replace.downUp.byLayer))
+                        .font(.title2)
+                }
+                .transportButton(model, "play", size: 34)
+                .help(model.isPlaying ? "一時停止（スペース）" : "再生（スペース。L でもう一度押すと速くなる）")
+                Button {
+                    model.step(1)
+                } label: {
+                    Label("1コマ進む", systemImage: "forward.frame.fill").labelStyle(.iconOnly)
+                }
+                .buttonRepeatBehavior(.enabled)
+                .transportButton(model, "forward")
+                .help("1コマ進む（→。⇧→で1秒進む。押し続けると進み続けます）")
             }
-            .help("1コマ戻る（←。⇧←で1秒戻る）")
-            Button {
-                model.togglePlay()
-            } label: {
-                Label(model.isPlaying ? "一時停止" : "再生", systemImage: model.isPlaying ? "pause.fill" : "play.fill")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 18)
-            }
-            .help(model.isPlaying ? "一時停止（スペース）" : "再生（スペース。L でもう一度押すと速くなる）")
-            Button {
-                model.step(1)
-            } label: {
-                Label("1コマ進む", systemImage: "forward.frame.fill").labelStyle(.iconOnly)
-            }
-            .help("1コマ進む（→。⇧→で1秒進む）")
             Timeline(model: model, video: video, duration: duration)
                 .frame(minWidth: 140)
             if time { timeLabel }
@@ -557,6 +568,9 @@ private struct Timeline: View {
                 // Thin track, thick scene lines: in the same width and a near gray, the lines of a
                 // person not hidden read as part of the track.
                 Capsule().fill(.quaternary).frame(height: 4)
+                // The part played, a shade darker: where the playhead is reads at a glance,
+                // also where the knob is over a scene line.
+                Capsule().fill(.tertiary).frame(width: max(4, x(model.playheadTime)), height: 4)
                 if let id = video.focusedPerson, let scenes = video.scenes[id] {
                     let on = video.selected.contains(id)
                     ForEach(Array(scenes.enumerated()), id: \.offset) { _, r in
@@ -566,24 +580,32 @@ private struct Timeline: View {
                             .offset(x: x(r.lowerBound))
                     }
                 }
+                // The knob answers the pointer: a little larger over the track, larger still
+                // while it is dragged.
+                let knob: CGFloat = model.scrubbing ? 18 : model.timelineHover != nil ? 16 : 14
                 Circle()
                     .fill(.white)
-                    .shadow(color: .black.opacity(0.35), radius: 1.5)
-                    .frame(width: 14, height: 14)
-                    .offset(x: x(model.playheadTime) - 7)
+                    .shadow(color: .black.opacity(model.scrubbing ? 0.45 : 0.35), radius: model.scrubbing ? 3 : 1.5, y: model.scrubbing ? 1 : 0)
+                    .frame(width: knob, height: knob)
+                    .offset(x: x(model.playheadTime) - knob / 2)
+                    .animation(.snappy(duration: 0.15), value: knob)
             }
             .frame(height: geo.size.height)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { g in
+                model.scrubbing = true
                 model.seek(to: Double(min(max(g.location.x / max(w, 1), 0), 1)) * duration)
-            })
+            }.onEnded { _ in model.scrubbing = false })
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let p): model.timelineHover = Double(min(max(p.x / max(w, 1), 0), 1)) * duration
                 case .ended: model.timelineHover = nil
                 }
             }
-            .onDisappear { model.timelineHover = nil }
+            .onDisappear {
+                model.timelineHover = nil
+                model.scrubbing = false
+            }
             // Places to check (fewer faces hidden than just before and after) with the current
             // choices, or in the exported file while it is shown, above the track: a triangle,
             // not a color only.
@@ -628,9 +650,19 @@ private struct Timeline: View {
         // The track in the middle, in line with the buttons and the time; the dip markers are
         // drawn above this frame (over the bar's top padding).
         .frame(height: 20)
+        // The ▼ above the track are not in the slider that stands for it: the places to check
+        // are its actions (and in the Play menu).
         .accessibilityRepresentation {
             Slider(value: Binding(get: { model.playheadTime }, set: { model.seek(to: $0) }), in: 0...duration) {
                 Text("再生位置")
+            }
+            .accessibilityValue(formatTime(model.playheadTime))
+            .accessibilityHint(hasDips ? "確かめてほしい場面が\(model.shownDips.count)か所あります" : "")
+            .accessibilityAction(named: "次の確かめてほしい場面") {
+                if let d = model.dip(after: true) ?? model.shownDips.first { model.reviewShown(d) }
+            }
+            .accessibilityAction(named: "前の確かめてほしい場面") {
+                if let d = model.dip(after: false) ?? model.shownDips.last { model.reviewShown(d) }
             }
         }
     }
@@ -638,6 +670,35 @@ private struct Timeline: View {
     private var hasDips: Bool { !model.shownDips.isEmpty }
     /// Height of the row of dip markers above the track (and of their click targets).
     static let dipRow: CGFloat = 24
+}
+
+/// A transport button: a round patch under the pointer, darker and a little smaller while
+/// pressed (the bar's borderless buttons gave no sign of being under the pointer).
+private struct TransportButtonStyle: ButtonStyle {
+    let hovered: Bool
+    let size: CGFloat
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isEnabled ? .primary : .tertiary)
+            .frame(width: size, height: size)
+            .background(
+                configuration.isPressed ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.quaternary.opacity(hovered && isEnabled ? 1 : 0)),
+                in: .circle)
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .contentShape(.circle)
+            .animation(.easeOut(duration: 0.12), value: hovered)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+}
+
+private extension View {
+    /// `TransportButtonStyle`, with the pointer followed in the model (`hoveredTransport`).
+    func transportButton(_ model: AppModel, _ id: String, size: CGFloat = 30) -> some View {
+        buttonStyle(TransportButtonStyle(hovered: model.hoveredTransport == id, size: size))
+            .onHover { model.hoveredTransport = $0 ? id : (model.hoveredTransport == id ? nil : model.hoveredTransport) }
+    }
 }
 
 /// "0.5倍", "2倍".

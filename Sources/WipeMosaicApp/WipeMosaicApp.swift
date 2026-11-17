@@ -11,6 +11,13 @@ struct WipeMosaicApp: App {
         NSApplication.shared.setActivationPolicy(.regular)
         model = AppModel()
         AppDelegate.model = model
+        // For checking the screens in the other appearance without changing the system's
+        // (`WIPE_MOSAIC_APPEARANCE=dark` or `light`; see docs/DEVELOPMENT.md).
+        switch ProcessInfo.processInfo.environment["WIPE_MOSAIC_APPEARANCE"] {
+        case "dark": NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+        case "light": NSApplication.shared.appearance = NSAppearance(named: .aqua)
+        default: break
+        }
     }
 
     var body: some Scene {

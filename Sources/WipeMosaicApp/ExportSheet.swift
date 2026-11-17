@@ -216,31 +216,12 @@ private struct ExportRow: View {
                         warning(note)
                     }
                     if video.canExport, case let left = video.liveDips.filter({ !video.checkedDips.contains($0.id) }).count, left > 0 {
-                        HStack(spacing: 8) {
-                            Label {
-                                Text("確かめていない場面が\(left)か所あります（隠す顔の数が前後より減る場面）")
-                                    .fixedSize(horizontal: false, vertical: true)
-                            } icon: {
-                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                            }
-                            Button("確かめる") { model.reviewUnchecked(video.id) }
-                                .buttonStyle(.link)
-                                .help("シートを閉じて、この動画のまだ確かめていない最初の場面を表示します")
-                        }
-                        .font(.callout)
+                        warning("確かめていない場面が\(left)か所あります（隠す顔の数が前後より減る場面）", action: "場面を確かめる",
+                                help: "シートを閉じて、この動画のまだ確かめていない最初の場面を表示します") { model.reviewUnchecked(video.id) }
                     }
                     if video.canExport, !video.uncheckedHints.isEmpty {
-                        HStack(spacing: 8) {
-                            Label {
-                                Text("選んでいない似た人が\(video.uncheckedHints.count)人います")
-                            } icon: {
-                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                            }
-                            Button("確かめる") { model.review(video.id) }
-                                .buttonStyle(.link)
-                                .help("シートを閉じて、この動画の人の一覧を表示します")
-                        }
-                        .font(.callout)
+                        warning("選んでいない似た人が\(video.uncheckedHints.count)人います", action: "人の一覧を確かめる",
+                                help: "シートを閉じて、この動画の人の一覧を表示します") { model.review(video.id) }
                     }
                 }
                 Spacer(minLength: 0)
@@ -256,6 +237,27 @@ private struct ExportRow: View {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         }
         .font(.callout)
+    }
+
+    /// A warning with what to do about it: a small button under the text, in line with it
+    /// (a blue word at the end of a two-line warning sat beside its second line, and did not
+    /// look like something to press). Also an action of the row, for VoiceOver: the row is one
+    /// checkbox, which hides the button inside it.
+    private func warning(_ text: String, action: String, help: String, perform: @escaping () -> Void) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(text).fixedSize(horizontal: false, vertical: true)
+                Button(action, action: perform)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help(help)
+            }
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
+        .font(.callout)
+        .padding(.bottom, 2)
+        .accessibilityAction(named: action, perform)
     }
 
     /// The kind of search not asked for when the video was added: a warning, since the user

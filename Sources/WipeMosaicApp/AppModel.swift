@@ -177,6 +177,10 @@ final class AppModel {
     static let playbackRates: [Float] = [0.5, 1, 1.5, 2]
     /// Time under the pointer on the timeline (shown in a label while hovering).
     var timelineHover: Double?
+    /// The transport button under the pointer (`TransportButtonStyle`), and whether the
+    /// playhead is being dragged (its knob is larger then).
+    var hoveredTransport: String?
+    var scrubbing = false
     /// The main window, for the player keys (`handleKey`).
     @ObservationIgnored weak var mainWindow: NSWindow?
     @ObservationIgnored private var keyMonitor: Any?
