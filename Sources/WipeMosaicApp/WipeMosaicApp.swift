@@ -126,13 +126,15 @@ private struct AppCommands: Commands {
             .disabled(!model.hasVideo)
             Divider()
             Button("前の確かめてほしい場面") {
-                if let d = model.dip(after: false) ?? model.current?.summary?.dips.last { model.review(d) }
+                if let d = model.dip(after: false) ?? model.shownDips.last { model.reviewShown(d) }
             }
-            .disabled(model.current?.summary?.dips.isEmpty != false)
+            .keyboardShortcut("[")
+            .disabled(model.shownDips.isEmpty)
             Button("次の確かめてほしい場面") {
-                if let d = model.dip(after: true) ?? model.current?.summary?.dips.first { model.review(d) }
+                if let d = model.dip(after: true) ?? model.shownDips.first { model.reviewShown(d) }
             }
-            .disabled(model.current?.summary?.dips.isEmpty != false)
+            .keyboardShortcut("]")
+            .disabled(model.shownDips.isEmpty)
         }
         CommandMenu("人物") {
             Button("全員を隠す") { model.selectAll() }

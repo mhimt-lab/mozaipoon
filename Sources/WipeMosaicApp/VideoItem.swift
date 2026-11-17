@@ -250,6 +250,9 @@ final class VideoItem: Identifiable {
         return out
     }
 
+    /// Places to check with the current choices (`findDips`), for the shown video.
+    var liveDips: [Dip] = []
+
     func frames(hold: Double, stickered: Set<Int>) -> [FrameFaces] {
         let faces = analysis?.frames(selected: selected, endHold: hold, stickered: stickered) ?? []
         guard let text, let mask = textMask, !mask.isEmpty else { return faces }

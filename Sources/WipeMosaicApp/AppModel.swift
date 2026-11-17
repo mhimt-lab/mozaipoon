@@ -1031,7 +1031,11 @@ final class AppModel {
     /// Push the current selection and settings to the player's mosaic and redraw if paused.
     private func refreshLive() {
         guard let v = current else { return }
-        v.live.update(frames: frames(for: v), render: render(for: v), enabled: viewMode == .mosaic)
+        let frames = frames(for: v)
+        v.live.update(frames: frames, render: render(for: v), enabled: viewMode == .mosaic)
+        // The places to check, before writing the file too: found only after it was written,
+        // each one meant choosing again and writing again.
+        v.liveDips = findDips(frames)
         redrawIfPaused()
     }
 
@@ -1144,9 +1148,17 @@ final class AppModel {
         }
     }
 
-    /// The dips of the exported file before or after the playhead, for the Play menu.
+    /// The places to check in what is shown: of the exported file while it is shown, else of
+    /// the current choices (the same rule, `findDips`).
+    var shownDips: [Dip] {
+        guard let v = current else { return [] }
+        return viewMode == .result ? v.summary?.dips ?? [] : v.liveDips
+    }
+
+    /// The dips shown before or after the playhead, for the Play menu.
     func dip(after: Bool) -> Dip? {
-        guard let dips = current?.summary?.dips, !dips.isEmpty else { return nil }
+        let dips = shownDips
+        guard !dips.isEmpty else { return nil }
         let t = playheadTime
         if after { return dips.first { $0.start > t + 0.01 } }
         return dips.last { $0.start < t - 0.01 }
@@ -1400,6 +1412,14 @@ final class AppModel {
     func review(_ dip: Dip) {
         resetZoom()  // checking the exported file: the whole picture, not a part of it
         viewMode = .result
+        seek(to: dip.start)
+    }
+
+    /// Shows one of `shownDips`: in the exported file while it is shown, else with the mosaic
+    /// of the current choices (not in the original, where nothing is hidden to check).
+    func reviewShown(_ dip: Dip) {
+        resetZoom()
+        if viewMode == .original { viewMode = .mosaic }
         seek(to: dip.start)
     }
 

@@ -386,7 +386,7 @@ private struct TransportBar: View {
         return d.isFinite && d > 0 ? d : max(video.info?.duration ?? 1, 0.01)
     }
 
-    private var hasDips: Bool { video.summary?.dips.isEmpty == false }
+    private var hasDips: Bool { !model.shownDips.isEmpty }
 
     var body: some View {
         // At the narrowest window the timeline keeps room to drag: the frame number goes
@@ -440,7 +440,7 @@ private struct TransportBar: View {
                  ? "青い太線は「人物 \(id)」が映っている場面です（隠す人）。"
                  : "太線は「人物 \(id)」が映っている場面です（まだ隠していない人）。")
         } else if hasDips {
-            Text("\(Text(Image(systemName: "arrowtriangle.down.fill")).foregroundStyle(.orange))は書き出した動画で確かめてほしい場面です（押すとその場面へ）。")
+            Text("\(Text(Image(systemName: "arrowtriangle.down.fill")).foregroundStyle(.orange))は確かめてほしい場面です（押すとその場面へ。⌘] で次へ）。")
         } else {
             Text(" ").accessibilityHidden(true)
         }
@@ -566,13 +566,14 @@ private struct Timeline: View {
                 }
             }
             .onDisappear { model.timelineHover = nil }
-            // Places to check in the exported file (fewer faces hidden than just before and
-            // after), above the track: a triangle, not a color only.
+            // Places to check (fewer faces hidden than just before and after) with the current
+            // choices, or in the exported file while it is shown, above the track: a triangle,
+            // not a color only.
             .overlay(alignment: .topLeading) {
-                if let dips = video.summary?.dips {
-                    ForEach(dips) { d in
+                if hasDips {
+                    ForEach(model.shownDips) { d in
                         Button {
-                            model.review(d)
+                            model.reviewShown(d)
                         } label: {
                             // A glyph big enough to see and a target big enough to hit
                             // (24×24 pt), above the track so it does not take the knob's drags.
@@ -584,7 +585,7 @@ private struct Timeline: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help("確かめてほしい場面（\(formatTime(d.start))）：前後より隠す顔が減っています。押すと書き出した動画のこの場面へ移動します")
+                        .help("確かめてほしい場面（\(formatTime(d.start))）：前後より隠す顔が減っています。押すとこの場面へ移動します")
                         .accessibilityLabel("確かめてほしい場面 \(formatTime(d.start))")
                         .position(x: x(d.start), y: -Self.dipRow / 2)
                     }
@@ -615,7 +616,7 @@ private struct Timeline: View {
         }
     }
 
-    private var hasDips: Bool { video.summary?.dips.isEmpty == false }
+    private var hasDips: Bool { !model.shownDips.isEmpty }
     /// Height of the row of dip markers above the track (and of their click targets).
     static let dipRow: CGFloat = 24
 }

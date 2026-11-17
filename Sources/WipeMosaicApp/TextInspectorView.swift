@@ -12,15 +12,17 @@ extension TextKind {
         case .qr: "QRコード"
         }
     }
-    /// One line under the label; the details are in the help tag.
+    /// One line under the label, short enough not to wrap in the narrowest inspector (two or
+    /// three lines under each of six kinds pushed the rest of the column out of sight); the
+    /// details are in the help tag.
     var note: String {
         switch self {
-        case .number: "6桁以上。ハイフン・空白や英字付き（A-123456）も"
+        case .number: "6桁以上（ハイフン・英字付きも）"
         case .email: "〜@〜.〜 の形"
-        case .url: "https://・www. で始まるもの、.com・.jp などで終わるもの"
-        case .address: "〒や「〜県〜市」「〜区1-2-3」。行の終わりと、すぐ下の行も"
-        case .name: "よくある名字と、続く名前や「さん」など。ほかの名前は「隠す言葉」へ"
-        case .qr: "LINEの友だち追加・支払い・サインイン用など。ぼけたものは見つからないことも"
+        case .url: "https://・www.・.com・.jp など"
+        case .address: "〒・「〜県〜市」など。下の行も"
+        case .name: "よくある名字と、続く名前・「さん」"
+        case .qr: "LINEの友だち追加・支払いなど"
         }
     }
     var detail: String {
@@ -98,7 +100,7 @@ struct TextInspectorView: View {
         Section {
             Text(video.textAll
                  ? "この動画は、読み取れた文字をすべて隠しています（下の「この動画だけ」）。"
-                 : "見つかった部分だけを隠し、行のほかの文字は残します。外した種類は、ほかの動画でも隠しません。")
+                 : "見つかった部分だけを隠します。説明は、項目にポインタを重ねると出ます。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -123,12 +125,12 @@ struct TextInspectorView: View {
                         Text(kind.note)
                             .font(.callout)
                             .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(1)
                     }
                 }
                 .toggleStyle(.checkbox)
                 .disabled(video.textAll)
-                .help(kind.detail)
+                .help(kind.detail + "外した種類は、ほかの動画でも隠しません。")
                 .listRowSeparator(.hidden)
             }
         } header: {
@@ -162,10 +164,11 @@ struct TextInspectorView: View {
         // Counted where the mosaic is made (in the background); nothing while it is remade.
         let others = model.videos.filter { $0.id != video.id && $0.textMask != nil }
         return Section {
-            Text("名前やアカウント名など。画面のどこに出ても、その言葉の部分を隠します。名字を入れると、続く名前も隠します。")
+            Text("名前やアカウント名など。名字を入れると、続く名前も隠します。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .help("画面のどこに出ても、その言葉の部分を隠します。")
                 .listRowSeparator(.hidden)
             ForEach(model.textWords, id: \.self) { w in
                 VStack(alignment: .leading, spacing: 3) {
@@ -177,6 +180,17 @@ struct TextInspectorView: View {
                     }
                 }
                 .listRowSeparator(.hidden)
+            }
+            // What to do about the words not found, once (it was under each of them: three
+            // lines of warning a word, in every video that does not show it).
+            if model.textWords.contains(where: { w in
+                video.textMask?.wordLines[w] == 0 && others.allSatisfy { ($0.textMask?.wordLines[w] ?? 0) == 0 }
+            }) {
+                Text("見つからない言葉は、字の違い（高／髙など）や読み違いがないか、下の一覧で確かめてください。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .listRowSeparator(.hidden)
             }
             if model.addingTextWord || model.textWords.isEmpty {
                 // Return adds the word and leaves a new empty field, to type the next one.
@@ -442,14 +456,15 @@ private struct WordHits: View {
                 .foregroundStyle(.secondary)
                 .padding(.leading, 4)
         } else {
+            // One line a word: what to do about it is said once, under the words.
             Label {
-                Text("\(othersRead ? "どの動画でも" : "この動画では")見つかりませんでした。字の違い（高／髙など）や読み違いがないか、下の一覧で確かめてください。")
-                    .fixedSize(horizontal: false, vertical: true)
+                Text("\(othersRead ? "どの動画でも" : "この動画では")見つかりません")
             } icon: {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             }
             .font(.callout)
             .padding(.leading, 4)
+            .help("この言葉は隠れていません。字の違い（高／髙など）や読み違いがないか、下の「見つかった文字」の一覧で確かめてください。")
         }
     }
 }
