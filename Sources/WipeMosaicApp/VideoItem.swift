@@ -254,8 +254,12 @@ final class VideoItem: Identifiable {
     var analysisStarted: Date?
     var textStarted: Date?
 
-    /// Places to check with the current choices (`findDips`), for the shown video.
+    /// Places to check with the current choices (`findDips`): of the shown video, and of
+    /// every video offered when the export sheet opens.
     var liveDips: [Dip] = []
+    /// The places to check that were looked at (`Dip.id`, their start), in the mosaic view or
+    /// the exported file.
+    var checkedDips: Set<Double> = []
 
     func frames(hold: Double, stickered: Set<Int>) -> [FrameFaces] {
         let faces = analysis?.frames(selected: selected, endHold: hold, stickered: stickered) ?? []

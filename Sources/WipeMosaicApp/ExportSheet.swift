@@ -215,6 +215,20 @@ private struct ExportRow: View {
                     if video.canExport, let note = notSearched {
                         warning(note)
                     }
+                    if video.canExport, case let left = video.liveDips.filter({ !video.checkedDips.contains($0.id) }).count, left > 0 {
+                        HStack(spacing: 8) {
+                            Label {
+                                Text("確かめていない場面が\(left)か所あります（隠す顔の数が前後より減る場面）")
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            }
+                            Button("確かめる") { model.reviewUnchecked(video.id) }
+                                .buttonStyle(.link)
+                                .help("シートを閉じて、この動画のまだ確かめていない最初の場面を表示します")
+                        }
+                        .font(.callout)
+                    }
                     if video.canExport, !video.uncheckedHints.isEmpty {
                         HStack(spacing: 8) {
                             Label {

@@ -226,13 +226,24 @@ private struct DocumentProxy: ViewModifier {
 
 private struct EmptyStateView: View {
     @Bindable var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 28) {
             VStack(spacing: 8) {
-                Image(systemName: "film.stack")
-                    .font(.system(size: 48, weight: .light))
-                    .foregroundStyle(.secondary)
+                // The app's own face rather than a stock symbol: it bobs a little while it
+                // waits and leans in when a video is dragged over the window (not with
+                // Reduce Motion).
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 104, height: 104)
+                    .scaleEffect(model.dropTargeted ? 1.12 : 1)
+                    .animation(reduceMotion ? nil : .bouncy(duration: 0.35), value: model.dropTargeted)
+                    .phaseAnimator([false, true]) { icon, up in
+                        icon.offset(y: up && !reduceMotion ? -5 : 0)
+                    } animation: { _ in .easeInOut(duration: 1.8) }
+                    .accessibilityHidden(true)
                 Text("動画をここにドロップ")
                     .font(.title.weight(.semibold))
             }

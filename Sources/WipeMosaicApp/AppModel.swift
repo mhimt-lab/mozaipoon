@@ -157,7 +157,9 @@ final class AppModel {
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
     /// Time of the frame on screen (the face boxes and text outlines follow it).
-    var currentTime: Double = 0
+    var currentTime: Double = 0 {
+        didSet { noteDipSeen() }
+    }
     /// Where a seek is going. The playhead and the time shown follow it at once, while the
     /// picture follows as fast as the decoder can (see `seek(to:)`).
     private(set) var pendingSeek: Double?
@@ -219,6 +221,10 @@ final class AppModel {
     private var textScanningID: UUID?
     @ObservationIgnored private var exportTask: Task<Void, Never>?
     /// (done, total) of the running export queue.
+    /// Counted up when the last place to check was looked at, and when a file was written:
+    /// the marks that say so answer with a small motion (`symbolEffect`).
+    var allCheckedPulse = 0
+    var exportedPulse = 0
     var exportProgress: (done: Int, total: Int)?
     /// When the export in hand began (for the time left).
     var exportStarted: Date?
@@ -1190,6 +1196,33 @@ final class AppModel {
         return viewMode == .result ? v.summary?.dips ?? [] : v.liveDips
     }
 
+    /// A place to check counts as checked once its frames were on screen with what is hidden
+    /// (jumped to with its ▼, or played through): not in the original, where nothing is hidden.
+    private func noteDipSeen() {
+        guard viewMode != .original, let v = current else { return }
+        let t = currentTime, slack = 1.0 / 60
+        for d in shownDips where t >= d.start - slack && t <= d.end + slack && !v.checkedDips.contains(d.id) {
+            v.checkedDips.insert(d.id)
+            // The last one: a small flourish where the count is shown.
+            if shownDips.allSatisfy({ v.checkedDips.contains($0.id) }) { allCheckedPulse += 1 }
+        }
+    }
+
+    /// The first place to check that was not looked at yet, with the current choices.
+    func firstUncheckedDip(_ v: VideoItem) -> Dip? {
+        v.liveDips.first { !v.checkedDips.contains($0.id) }
+    }
+
+    /// From the export sheet: close it and show the first place of that video not checked yet.
+    func reviewUnchecked(_ id: UUID) {
+        guard let v = videos.first(where: { $0.id == id }), let d = firstUncheckedDip(v) else { return }
+        showingExportSheet = false
+        currentID = id
+        viewMode = .mosaic
+        resetZoom()
+        seek(to: d.start)
+    }
+
     /// The dips shown before or after the playhead, for the Play menu.
     func dip(after: Bool) -> Dip? {
         let dips = shownDips
@@ -1301,6 +1334,8 @@ final class AppModel {
         if choice.isEmpty { choice = [ready[0].id] }
         exportChoice = choice
         player.pause()
+        // The places to check of every video offered, not only the one shown (`refreshLive`).
+        for v in ready { v.liveDips = findDips(frames(for: v)) }
         showingExportSheet = true
     }
 
@@ -1431,6 +1466,11 @@ final class AppModel {
                 stickers: stickers)
             v.resultItem = AVPlayerItem(url: out)
             v.job = .done
+            // After the result is on screen, so its mark is there to move.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(250))
+                self.exportedPulse += 1
+            }
         } catch {
             if wroteOutput { try? FileManager.default.removeItem(at: out) }  // partial file only
             if error is CancellationError || Task.isCancelled {

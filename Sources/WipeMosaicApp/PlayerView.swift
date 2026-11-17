@@ -434,15 +434,33 @@ private struct TransportBar: View {
     private var caption: some View {
         if model.viewMode == .result, hasDips {
             // In the written file the markers are what to look at.
-            Text("\(Text(Image(systemName: "arrowtriangle.down.fill")).foregroundStyle(.orange))は書き出した動画で確かめてほしい場面です（押すとその場面へ）。")
+            dipCaption
         } else if let id = video.focusedPerson, video.scenes[id] != nil {
             Text(video.selected.contains(id)
                  ? "青い太線は「人物 \(id)」が映っている場面です（隠す人）。"
                  : "太線は「人物 \(id)」が映っている場面です（まだ隠していない人）。")
         } else if hasDips {
-            Text("\(Text(Image(systemName: "arrowtriangle.down.fill")).foregroundStyle(.orange))は確かめてほしい場面です（押すとその場面へ。⌘] で次へ）。")
+            dipCaption
         } else {
             Text(" ").accessibilityHidden(true)
+        }
+    }
+
+    /// What the ▼ are and how many were looked at; all of them: said with a mark that moves once.
+    @ViewBuilder
+    private var dipCaption: some View {
+        let dips = model.shownDips
+        let checked = dips.filter { video.checkedDips.contains($0.id) }.count
+        if checked == dips.count {
+            Label {
+                Text("確かめてほしい場面を、\(dips.count)か所すべて確かめました。")
+            } icon: {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .symbolEffect(.bounce, value: model.allCheckedPulse)
+            }
+        } else {
+            Text("\(Text(Image(systemName: "arrowtriangle.down.fill")).foregroundStyle(.orange))は確かめてほしい場面です（押すとその場面へ。⌘] で次へ）。\(dips.count)か所中\(checked)か所を確かめました。")
         }
     }
 
@@ -577,16 +595,17 @@ private struct Timeline: View {
                         } label: {
                             // A glyph big enough to see and a target big enough to hit
                             // (24×24 pt), above the track so it does not take the knob's drags.
-                            Image(systemName: "arrowtriangle.down.fill")
+                            // Looked at: an outline in gray (the shape still says where it is).
+                            Image(systemName: video.checkedDips.contains(d.id) ? "arrowtriangle.down" : "arrowtriangle.down.fill")
                                 .font(.system(size: 13))
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(video.checkedDips.contains(d.id) ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
                                 .padding(.bottom, 1)
                                 .frame(width: 24, height: Self.dipRow, alignment: .bottom)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help("確かめてほしい場面（\(formatTime(d.start))）：前後より隠す顔が減っています。押すとこの場面へ移動します")
-                        .accessibilityLabel("確かめてほしい場面 \(formatTime(d.start))")
+                        .help("確かめてほしい場面（\(formatTime(d.start))）：前後より隠す顔が減っています。押すとこの場面へ移動します\(video.checkedDips.contains(d.id) ? "（確かめました）" : "")")
+                        .accessibilityLabel("確かめてほしい場面 \(formatTime(d.start))\(video.checkedDips.contains(d.id) ? "、確かめました" : "")")
                         .position(x: x(d.start), y: -Self.dipRow / 2)
                     }
                 }

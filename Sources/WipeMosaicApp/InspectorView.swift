@@ -466,7 +466,9 @@ struct ExportSection: View {
                         .help("\(s.output.path)\n\(s.format.description)・全\(s.frames)コマ中\(s.mosaicFrames)コマで隠す・\(formatSeconds(s.elapsed))")
                 }
             } icon: {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .symbolEffect(.bounce, value: model.exportedPulse)
             }
             if video.resultIsStale(model.mosaicParams) {
                 Label {
@@ -520,6 +522,11 @@ struct ExportSection: View {
                                 Spacer()
                                 // The fixed label color: `.secondary` would resolve against the accent around it.
                                 Text("隠す顔 \(d.around) → \(d.count)").foregroundStyle(Color.secondary).monospacedDigit()
+                                // Room kept when not checked too, so the counts line up.
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(Color.secondary)
+                                    .opacity(video.checkedDips.contains(d.id) ? 1 : 0)
+                                    .accessibilityLabel(video.checkedDips.contains(d.id) ? "確かめました" : "")
                             }
                             .foregroundStyle(Color.accentColor)
                             .padding(.vertical, 3)
