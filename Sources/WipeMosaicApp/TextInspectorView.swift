@@ -248,14 +248,15 @@ struct TextInspectorView: View {
         let flashes = text.entries.filter { !isMain($0) && shown($0) }
         return Section {
             Label {
-                Text("読み取れなかった文字（小さい文字、画像や動画の中の文字、一瞬だけ映った文字）やQRコード（ずっとぼけている・小さすぎる）は隠せません。書き出した動画を必ず最後まで確かめてください。")
+                Text("読み取れなかった文字やQRコードは隠せません。書き出した動画を最後まで確かめてください。")
                     .fixedSize(horizontal: false, vertical: true)
+                    .help("小さい文字、画像や動画の中の文字、一瞬だけ映った文字、ずっとぼけている・小さすぎるQRコードは、読み取れないことがあります。")
             } icon: {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             }
             .font(.callout)
             .listRowSeparator(.hidden)
-            Text("チェックを入れた行は、行全体を隠します。QRコードは丸ごと隠します。文字を押すと、その行が映る場面を表示します。")
+            Text("チェックした行は、行全体を隠します。文字を押すと、その場面を表示します。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

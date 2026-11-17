@@ -1286,6 +1286,18 @@ final class AppModel {
         }
     }
 
+    /// The View menu: one of the two tabs of the column at the right (opened if closed), and
+    /// the video before or after the one shown in the list (around at the ends).
+    func showTab(_ tab: InspectorTab) {
+        showInspector = true
+        inspectorTab = tab
+    }
+
+    func showVideo(offset: Int) {
+        guard videos.count > 1, let i = videos.firstIndex(where: { $0.id == currentID }) else { return }
+        currentID = videos[(i + offset + videos.count) % videos.count].id
+    }
+
     /// The first frame and the last one (Home and End, and the Play menu).
     func seekToStart() { seek(to: 0) }
     func seekToEnd() {

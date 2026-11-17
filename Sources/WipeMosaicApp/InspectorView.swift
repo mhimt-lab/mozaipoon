@@ -90,10 +90,11 @@ struct InspectorView: View {
         if let analysis = video.analysis, !analysis.people.isEmpty {
             Section {
                 // Always visible: what checking means and where else it can be done.
-                Text("顔を押すと、その人を隠します。もう一度押すと外れます。動画の中の顔を押しても同じです。")
+                Text("顔を押すと隠します（動画の中の顔でも）。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .help("一覧の顔か、動画の中の顔を押すと、その人を隠します。もう一度押すと外れます。")
                     .listRowSeparator(.hidden)
                     .selectionDisabled()
 
@@ -134,7 +135,7 @@ struct InspectorView: View {
                 if analysis.people.contains(where: { !$0.similar.isEmpty }) || analysis.people.count > 1 {
                     // A plain row (a section footer truncates to one line here).
                     Label {
-                        Text("同じ人が別の人として並ぶことがあります。一覧の顔をすべて確かめてください。")
+                        Text("同じ人が分かれて並ぶことがあります。全員の顔を確かめてください。")
                             .fixedSize(horizontal: false, vertical: true)
                     } icon: {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
@@ -246,6 +247,9 @@ private struct PersonRow: View {
                         .monospacedDigit()
                 }
                 .help("押すと、この人が映る場面を表示します")
+                // Read as one thing (the name was read again after the checkbox's, then the
+                // time on its own).
+                .accessibilityElement(children: .combine)
                 Spacer(minLength: 0)
                 Button {
                     model.nextScene(person.id)
@@ -300,9 +304,12 @@ private struct PersonRow: View {
                 }
                 if !similar.isEmpty {
                     let names = similar.map { "人物 \($0)" }.joined(separator: "、")
-                    Badge(
-                        text: checked ? "\(names)と同じ人かもしれません" : "\(names)と同じ人かもしれません。選ぶと\(names)も選ばれます",
-                        systemImage: "person.2.fill")
+                    // One line a person; what choosing does is in the help (two lines under
+                    // every other person made the list twice as long).
+                    Badge(text: "\(names)と同じ人かも", systemImage: "person.2.fill")
+                        .help(checked
+                              ? "似ているので、同じ人が分かれて並んでいるかもしれません。"
+                              : "似ているので、同じ人が分かれて並んでいるかもしれません。この人を選ぶと、\(names)も選ばれます。")
                 }
                 if registered {
                     Badge(text: "登録した顔に似ています", systemImage: "person.crop.circle.badge.checkmark")
@@ -570,16 +577,14 @@ private struct MosaicSection: View {
                     if model.current.map({ !model.activeStickers($0).isEmpty }) == true {
                         SliderRow(title: "スタンプの大きさ", value: $model.stickerScale, range: 0.8...2.0, step: 0.05,
                                   low: "小さい", high: "大きい", text: "\(Int((model.stickerScale * 100).rounded()))%",
-                                  note: "顔の写真は、動画の顔に合わせて重ねます。",
-                                  detail: "背景を透明にした切り抜き画像がおすすめです。スタンプの周りから、髪型や頭の輪郭は見えます。顔が見つからない場面や、画像から顔が透けるときは、スタンプの下にもモザイク（ぼかし）をかけます。")
+                                  detail: "顔の写真は、写真の顔を動画の顔に合わせて重ねます。背景を透明にした切り抜き画像がおすすめです。スタンプの周りから、髪型や頭の輪郭は見えます。顔が見つからない場面や、画像から顔が透けるときは、スタンプの下にもモザイク（ぼかし）をかけます。")
                     }
                     SliderRow(title: "顔の前後も続ける時間", value: $model.hold, range: 0...3, step: 0.25,
                               low: "0秒", high: "3秒", text: String(format: "%.2g秒", model.hold),
-                              note: "顔が見える前と後も、この時間だけ隠します。",
-                              detail: "横を向いた瞬間など、顔が一瞬見つからなくなったときにモザイクが外れるのを防ぎます。")
+                              detail: "顔が見える前と見えなくなった後も、この時間だけ隠し続けます。横を向いた瞬間など、顔が一瞬見つからなくなったときにモザイクが外れるのを防ぎます。")
                     SliderRow(title: "\(model.coverStyle == .blur ? "ぼかし" : "モザイク")の広さ", value: $model.pad, range: 0.2...1.0, step: 0.05,
                               low: "狭い", high: "広い", text: "\(Int((model.pad * 100).rounded()))%",
-                              note: "広げると、髪や耳まで隠れます。")
+                              detail: "広げると、髪や耳まで隠れます。")
                     Text("変えると、「隠した表示」にすぐ反映されます。すべての動画に共通です。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -620,11 +625,8 @@ struct CoverStyleRows: View {
                     Text("ぼかし").tag(CoverStyle.blur)
                 }
                 .pickerStyle(.segmented)
-                Text("顔と画面の文字に使います。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help("すべての動画に共通です。人ごとにスタンプを選んだ顔は、スタンプで隠します。")
+                .accessibilityLabel("基本の隠し方")
+                .help("顔と画面の文字に使います（すべての動画に共通）。人ごとにスタンプを選んだ顔は、スタンプで隠します。")
             }
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -642,13 +644,12 @@ struct CoverStyleRows: View {
                 }
                 .labelsHidden()
                 .disabled(model.autoBlock)
-                Text(model.autoBlock
-                     ? "おまかせでは、動画の大きさに合わせて決めます。"
-                     : blur ? "強くするほど、顔の形や文字が分からなくなります。" : "粗くするほど、顔の形や文字が分からなくなります。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Not the bare number of pixels.
+                .accessibilityValue(model.autoBlock ? "おまかせ" : "\(Int(model.block))ピクセル")
             }
+            .help(model.autoBlock
+                  ? "おまかせでは、動画の大きさに合わせて決めます。"
+                  : blur ? "強くするほど、顔の形や文字が分からなくなります。" : "粗くするほど、顔の形や文字が分からなくなります。")
         }
     }
 
@@ -733,8 +734,8 @@ private struct SliderRow: View {
     let low: String
     let high: String
     let text: String
-    /// One short line under the slider; `detail` (more of it) is in the help tag.
-    let note: String
+    /// What the slider does, in the help tag: the title and the ends of the slider say it
+    /// already (a line under each of four sliders filled the column).
     var detail = ""
 
     var body: some View {
@@ -753,10 +754,7 @@ private struct SliderRow: View {
             }
             .labelsHidden()
             .accessibilityValue(text)
-            Text(note)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .accessibilityHint(detail)
         }
         .help(detail)
     }

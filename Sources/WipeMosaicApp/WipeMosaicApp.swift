@@ -89,6 +89,21 @@ private struct AppCommands: Commands {
                 .keyboardShortcut("3")
                 .disabled(model.current?.summary == nil)
             Divider()
+            // The two tabs of the column at the right, and the videos of the list, without the
+            // pointer.
+            Button("隠すもの：画面の文字") { model.showTab(.text) }
+                .keyboardShortcut("1", modifiers: [.option, .command])
+                .disabled(!model.hasVideo)
+            Button("隠すもの：人の顔") { model.showTab(.people) }
+                .keyboardShortcut("2", modifiers: [.option, .command])
+                .disabled(!model.hasVideo)
+            Button("前の動画") { model.showVideo(offset: -1) }
+                .keyboardShortcut(.upArrow, modifiers: [.option, .command])
+                .disabled(model.videos.count < 2)
+            Button("次の動画") { model.showVideo(offset: 1) }
+                .keyboardShortcut(.downArrow, modifiers: [.option, .command])
+                .disabled(model.videos.count < 2)
+            Divider()
             Button(model.showFaceBoxes ? "枠を隠す" : "枠を表示") { model.showFaceBoxes.toggle() }
                 .keyboardShortcut("b")
                 .disabled(!model.canToggleBoxes)

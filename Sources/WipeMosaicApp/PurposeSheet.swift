@@ -59,6 +59,7 @@ struct PurposeSheet: View {
 
     private func option(_ p: Purpose) -> some View {
         let isDefault = p == model.lastPurpose
+        let number = (Purpose.allCases.firstIndex(of: p) ?? 0) + 1
         return Button {
             model.choosePurpose(p)
         } label: {
@@ -73,14 +74,15 @@ struct PurposeSheet: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(p.title).font(.headline)
                         Spacer(minLength: 8)
-                        if isDefault {
-                            // Return repeats the last choice: said, not shown as already chosen
-                            // (a screen recording would otherwise look set to faces).
-                            Text("前回と同じ ⏎")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize()
-                        }
+                        // The keys that choose it: its number, and Return for the last choice
+                        // (said, not shown as already chosen: a screen recording would
+                        // otherwise look set to faces).
+                        Text(isDefault ? "前回と同じ ⏎ ・ \(number)" : "\(number)")
+                            .font(.caption)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                            .accessibilityHidden(true)
                     }
                     Text(p.detail)
                         .font(.callout)
@@ -96,6 +98,15 @@ struct PurposeSheet: View {
         .buttonStyle(OptionButtonStyle(hovered: model.hoveredPurpose == p))
         .onHover { model.hoveredPurpose = $0 ? p : (model.hoveredPurpose == p ? nil : model.hoveredPurpose) }
         .modifier(DefaultKey(isOn: isDefault))
+        // 1, 2, 3 choose without the pointer; a button hidden behind this one carries the key
+        // (a button has one key equivalent, and the last choice has Return).
+        .background {
+            Button("") { model.choosePurpose(p) }
+                .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: [])
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
+        .accessibilityHint("\(number) のキーでも選べます")
     }
 }
 

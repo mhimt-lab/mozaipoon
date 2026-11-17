@@ -125,6 +125,7 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .accessibilityLabel("表示")
                 .help("元の動画／隠した表示（いま選んでいるものを、書き出しと同じように隠した表示）／書き出し結果（書き出したファイル）。⌘1〜⌘3")
             }
         }
