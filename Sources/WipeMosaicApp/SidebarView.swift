@@ -23,6 +23,18 @@ struct SidebarView: View {
             }
         }
         .onDeleteCommand { model.requestRemove(model.currentID) }
+        // Not an action at the foot (HIG), only a word that more can be dropped in: with one
+        // or two videos the column under them is empty, and nothing said so.
+        .safeAreaInset(edge: .bottom) {
+            if !model.videos.isEmpty {
+                Label("動画をドロップして追加できます", systemImage: "arrow.down.to.line")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .accessibilityHidden(true)  // said in the add button's help
+            }
+        }
         // HIG: no actions at the sidebar's bottom edge; adding lives in the sidebar's toolbar,
         // the File menu (⌘O) and drag and drop.
         .toolbar {

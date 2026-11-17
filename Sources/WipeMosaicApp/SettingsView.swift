@@ -158,12 +158,9 @@ private struct StickerSettings: View {
     var body: some View {
         Form {
             Section {
-                if model.stickerLibrary.isEmpty {
-                    Text("まだありません。メイン画面の人の一覧で、隠す人の「隠し方」メニューから画像を選ぶと、ここに並びます。")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else {
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                // Added here too, as the registered faces are (the stickers could only be
+                // added from a person's menu in the main window; this screen sent one there).
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                         ForEach(Array(model.stickerLibrary.enumerated()), id: \.element.id) { i, item in
                             let hovered = model.hoveredSticker == item.id
                             // Delete on hover, as for the registered faces (not a blue link).
@@ -199,15 +196,31 @@ private struct StickerSettings: View {
                             .accessibilityLabel("スタンプ \(i + 1)")
                             .accessibilityAction(named: "削除") { model.stickerToRemove = item }
                         }
-                    }
-                    .padding(.vertical, 6)
+                        Button {
+                            model.importingStickersInSettings = true
+                        } label: {
+                            VStack(spacing: 6) {
+                                Image(systemName: "plus")
+                                    .font(.title2)
+                                    .frame(width: 64, height: 64)
+                                    .background(.quaternary, in: .circle)
+                                Text("追加…").font(.callout)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("スタンプにする画像を追加")
+                }
+                .padding(.vertical, 6)
+                .dropDestination(for: URL.self) { urls, _ in
+                    let images = urls.filter(AppModel.isPhoto)
+                    for url in images { model.addSticker(from: url) }
+                    return !images.isEmpty
                 }
             } header: {
                 Text("顔に重ねる画像")
             } footer: {
-                Text(model.stickerLibrary.isEmpty
-                     ? "画像はこのMacの中だけに保存され、どこにも送信されません。"
-                     : "追加は人の一覧の「隠し方」メニューから。削除は × か右クリックで（取り消せず、使っていた人は基本の隠し方に戻ります）。画像はこのMacの中だけに保存され、どこにも送信されません。")
+                Text("隠す人ごとに、人の一覧の「隠し方」メニューで選べます。画像はドロップしても追加できます。削除は × か右クリックで（取り消せず、使っていた人は基本の隠し方に戻ります）。画像はこのMacの中だけに保存され、どこにも送信されません。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -215,6 +228,9 @@ private struct StickerSettings: View {
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
         .stickerRemovalDialog(model: model, item: $model.stickerToRemove)
+        .fileImporter(isPresented: $model.importingStickersInSettings, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { for url in urls { model.addSticker(from: url) } }
+        }
     }
 }
 

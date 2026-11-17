@@ -124,6 +124,17 @@ private struct AppCommands: Commands {
                 .disabled(!model.hasVideo)
             Button("1コマ進む（→）") { model.step(1) }
                 .disabled(!model.hasVideo)
+            Button("逆再生（J）") { model.playReverse() }
+                .disabled(!model.hasVideo || !model.canPlayReverse)
+            Button("停止（K）") { model.stop() }
+                .disabled(!model.hasVideo)
+            Toggle("繰り返し再生", isOn: Binding(get: { model.loops }, set: { model.loops = $0 }))
+                .disabled(!model.hasVideo)
+            Divider()
+            Button("最初のコマへ（home）") { model.seekToStart() }
+                .disabled(!model.hasVideo)
+            Button("最後のコマへ（end）") { model.seekToEnd() }
+                .disabled(!model.hasVideo)
             Divider()
             Picker("速さ", selection: Binding(get: { model.playbackRate }, set: { model.playbackRate = $0 })) {
                 ForEach(AppModel.playbackRates, id: \.self) { r in
@@ -131,6 +142,8 @@ private struct AppCommands: Commands {
                 }
             }
             .disabled(!model.hasVideo)
+            Toggle("音を消す（M）", isOn: Binding(get: { model.isMuted }, set: { model.isMuted = $0 }))
+                .disabled(!model.hasVideo)
             Divider()
             Button("前の確かめてほしい場面") {
                 if let d = model.dip(after: false) ?? model.shownDips.last { model.reviewShown(d) }

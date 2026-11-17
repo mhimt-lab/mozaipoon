@@ -257,6 +257,8 @@ final class VideoItem: Identifiable {
     /// Places to check with the current choices (`findDips`): of the shown video, and of
     /// every video offered when the export sheet opens.
     var liveDips: [Dip] = []
+    /// Where something is hidden with the current choices (the band under the timeline).
+    var coverRanges: [ClosedRange<Double>] = []
     /// The places to check that were looked at (`Dip.id`, their start), in the mosaic view or
     /// the exported file.
     var checkedDips: Set<Double> = []

@@ -389,36 +389,67 @@ private struct TransportBar: View {
     private var hasDips: Bool { !model.shownDips.isEmpty }
 
     var body: some View {
-        // At the narrowest window the timeline keeps room to drag: the frame number goes
-        // first, then the time moves down to the end of the caption line (the scenes to check
-        // are told by time, so it is never dropped).
-        ViewThatFits(in: .horizontal) {
-            layout(time: true, frame: true)
-            layout(time: true, frame: false)
-            layout(time: false, frame: false)
-        }
+        // The timeline has the first line to itself and the buttons: the time and the frame
+        // number are at the end of the line under it (beside the timeline they left it a
+        // third of the bar at the default window size).
+        layout
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar, ignoresSafeAreaEdges: [])  // not under the sidebar either (a white band at its foot)
     }
 
-    private func layout(time: Bool, frame: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            controls(time: time, frame: frame)
-                .buttonStyle(.borderless)
-                .font(.title3)
-                // Room for the dip markers above the track (they sit over the bar's top padding).
+    /// The timeline across the whole bar, the buttons under it (as editing apps lay a viewer
+    /// out), then one line that says what the marks mean.
+    private var layout: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Timeline(model: model, video: video, duration: duration)
+                // Room for the dip markers above the track (they sit over the bar's top padding)
+                // and for the time marks under it.
                 .padding(.top, hasDips ? Timeline.dipRow - 10 : 0)
-            // Always one line, so the video does not grow and shrink as a person is chosen.
-            HStack(spacing: 12) {
-                caption
-                    .lineLimit(1)
-                    // No ideal width: a long caption must not make the wider layouts "not fit".
-                    .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
-                if !time { timeLabel }
+                .padding(.bottom, Timeline.rulerRow - 2)
+            // The buttons in the middle, the time before them and the view's switches after;
+            // in a narrow bar (both side columns open in a small window) on two lines, then
+            // without the buttons that have a key and a menu item.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    position
+                    Spacer(minLength: 0)
+                    transport(full: true)
+                    Spacer(minLength: 0)
+                    switches
+                }
+                VStack(spacing: 4) {
+                    transport(full: true)
+                    HStack(spacing: 8) {
+                        position
+                        Spacer(minLength: 0)
+                        switches
+                    }
+                }
+                VStack(spacing: 4) {
+                    transport(full: false)
+                    HStack(spacing: 8) {
+                        timeLabel
+                        Spacer(minLength: 0)
+                        switches
+                    }
+                }
             }
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            .font(.title3)
+            // Always one line, so the video does not grow and shrink as a person is chosen.
+            caption
+                .lineLimit(1)
+                .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The time and the frame number, read together.
+    private var position: some View {
+        HStack(spacing: 10) {
+            timeLabel
+            frameLabel
         }
     }
 
@@ -441,6 +472,10 @@ private struct TransportBar: View {
                  : "太線は「人物 \(id)」が映っている場面です（まだ隠していない人）。")
         } else if hasDips {
             dipCaption
+        } else if model.viewMode != .original, !video.coverRanges.isEmpty {
+            // The line's blue is said here while nothing else is: without it, a line blue
+            // from end to end reads as "played".
+            Text("線の青い所は、顔や文字を隠している区間です。")
         } else {
             Text(" ").accessibilityHidden(true)
         }
@@ -484,72 +519,140 @@ private struct TransportBar: View {
               : "一時停止中に顔の枠と、文字を隠す範囲の枠（橙の点線）を表示する（⌘B）")
     }
 
-    private func controls(time: Bool, frame: Bool) -> some View {
-        HStack(spacing: 12) {
-            // The three as one group, closer to each other than to the timeline. Held down, the
-            // step buttons go on stepping (as the arrow keys do).
-            HStack(spacing: 2) {
-                Button {
-                    model.step(-1)
-                } label: {
-                    Label("1コマ戻る", systemImage: "backward.frame.fill").labelStyle(.iconOnly)
+    /// The frame on screen (its boxes), to tell one frame from the next; the count is in the
+    /// help. As wide as the largest number from the start, so the line does not shift while
+    /// the number grows. Dimmed while the picture is still catching up with the playhead (the
+    /// number is that of the frame shown).
+    @ViewBuilder
+    private var frameLabel: some View {
+        if let n = model.frameNumber {
+            Text("コマ \(n.count)")
+                .hidden()
+                .overlay(alignment: .trailing) {
+                    Text("コマ \(n.index)")
                 }
-                .buttonRepeatBehavior(.enabled)
-                .transportButton(model, "back")
-                .help("1コマ戻る（←。⇧←で1秒戻る。押し続けると戻り続けます）")
-                Button {
-                    model.togglePlay()
-                } label: {
-                    // The play mark turns into the pause mark, not one swapped for the other.
-                    Label(model.isPlaying ? "一時停止" : "再生", systemImage: model.isPlaying ? "pause.fill" : "play.fill")
-                        .labelStyle(.iconOnly)
-                        .contentTransition(.symbolEffect(.replace.downUp.byLayer))
-                        .font(.title2)
+                .font(.callout)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .opacity(model.pendingSeek == nil ? 1 : 0.5)
+                .fixedSize()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("コマ \(n.index)、全\(n.count)コマ")
+                .help("いま表示しているコマの番号（全\(n.count)コマ）")
+        }
+    }
+
+    /// The playback buttons, as on an editing app's viewer: first frame, one frame back,
+    /// play backward, stop, play, one frame on, last frame, repeat. The one in effect keeps
+    /// its round patch. `full` false leaves out the first and last frame and repeat (Home,
+    /// End and the Play menu have them).
+    private func transport(full: Bool) -> some View {
+        HStack(spacing: 2) {
+            if full {
+                Button { model.seekToStart() } label: {
+                    Label("最初のコマへ", systemImage: "backward.end.alt.fill").labelStyle(.iconOnly)
                 }
-                .transportButton(model, "play", size: 34)
-                .help(model.isPlaying ? "一時停止（スペース）" : "再生（スペース。L でもう一度押すと速くなる）")
-                Button {
-                    model.step(1)
-                } label: {
-                    Label("1コマ進む", systemImage: "forward.frame.fill").labelStyle(.iconOnly)
-                }
-                .buttonRepeatBehavior(.enabled)
-                .transportButton(model, "forward")
-                .help("1コマ進む（→。⇧→で1秒進む。押し続けると進み続けます）")
+                .transportButton(model, "start")
+                .help("最初のコマへ（home）")
             }
-            Timeline(model: model, video: video, duration: duration)
-                .frame(minWidth: 140)
-            if time { timeLabel }
-            if frame, let n = model.frameNumber {
-                // The frame on screen (its boxes), to tell one frame from the next; the count
-                // is in the help. As wide as the largest number from the start, so the timeline
-                // does not shift while the number grows. Dimmed while the picture is still
-                // catching up with the playhead (the number is that of the frame shown).
-                Text("コマ \(n.count)")
-                    .hidden()
-                    .overlay(alignment: .trailing) {
-                        Text("コマ \(n.index)")
+            Button { model.step(-1) } label: {
+                Label("1コマ戻る", systemImage: "backward.frame.fill").labelStyle(.iconOnly)
+            }
+            .buttonRepeatBehavior(.enabled)
+            .transportButton(model, "back")
+            .help("1コマ戻る（←。⇧←で1秒戻る。押し続けると戻り続けます）")
+            Button { model.playReverse() } label: {
+                Label("逆再生", systemImage: "arrowtriangle.backward.fill").labelStyle(.iconOnly)
+            }
+            .transportButton(model, "reverse", size: 32, active: model.isPlaying && model.isReversing)
+            .disabled(!model.canPlayReverse)
+            .help("逆再生（J）")
+            Button { model.stop() } label: {
+                Label("停止", systemImage: "stop.fill").labelStyle(.iconOnly)
+            }
+            .transportButton(model, "stop", size: 32)
+            .help("停止（K、スペース）")
+            Button { model.play() } label: {
+                Label("再生", systemImage: "play.fill").labelStyle(.iconOnly)
+            }
+            .transportButton(model, "play", size: 32, active: model.isPlaying && !model.isReversing)
+            .help("再生（スペース。L でもう一度押すと速くなる）")
+            Button { model.step(1) } label: {
+                Label("1コマ進む", systemImage: "forward.frame.fill").labelStyle(.iconOnly)
+            }
+            .buttonRepeatBehavior(.enabled)
+            .transportButton(model, "forward")
+            .help("1コマ進む（→。⇧→で1秒進む。押し続けると進み続けます）")
+            if full {
+                Button { model.seekToEnd() } label: {
+                    Label("最後のコマへ", systemImage: "forward.end.alt.fill").labelStyle(.iconOnly)
+                }
+                .transportButton(model, "end")
+                .help("最後のコマへ（end）")
+                Button { model.loops.toggle() } label: {
+                    Label("繰り返し再生", systemImage: "repeat").labelStyle(.iconOnly)
+                }
+                .transportButton(model, "loop", active: model.loops)
+                .help(model.loops ? "繰り返し再生をやめる" : "最後まで再生したら、最初から繰り返す")
+                .accessibilityValue(model.loops ? "オン" : "オフ")
+            }
+        }
+    }
+
+    /// After the buttons: the places to check before and after the playhead (when there are
+    /// any), the speed, the sound and the outlines.
+    private var switches: some View {
+        HStack(spacing: 6) {
+            // Only while there are places to check: two dimmed buttons said nothing.
+            if hasDips {
+                HStack(spacing: 2) {
+                    Button {
+                        if let d = model.dip(after: false) ?? model.shownDips.last { model.reviewShown(d) }
+                    } label: {
+                        Label("前の確かめてほしい場面", systemImage: "backward.end.fill").labelStyle(.iconOnly)
                     }
-                    .font(.callout)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .opacity(model.pendingSeek == nil ? 1 : 0.5)
-                    .fixedSize()
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("コマ \(n.index)、全\(n.count)コマ")
-                    .help("いま表示しているコマの番号（全\(n.count)コマ）")
+                    .transportButton(model, "prevDip")
+                    .help("前の確かめてほしい場面へ（⌘[）")
+                    Button {
+                        if let d = model.dip(after: true) ?? model.shownDips.first { model.reviewShown(d) }
+                    } label: {
+                        Label("次の確かめてほしい場面", systemImage: "forward.end.fill").labelStyle(.iconOnly)
+                    }
+                    .transportButton(model, "nextDip")
+                    .help("次の確かめてほしい場面へ（⌘]）")
+                }
             }
-            if model.playbackRate != 1 {
-                // Always in sight: at a faster speed, a few frames left unhidden are easy to miss.
+            // The speed, always in sight (at a faster one, a few frames left unhidden are easy
+            // to miss) and changed here, not only in the Play menu.
+            Menu {
+                Picker("速さ", selection: Binding(get: { model.playbackRate }, set: { model.playbackRate = $0 })) {
+                    ForEach(AppModel.playbackRates, id: \.self) { r in
+                        Text(r == 1 ? "ふつう（1倍）" : rateLabel(r)).tag(r)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
                 Text(rateLabel(model.playbackRate))
-                    .font(.callout.weight(.semibold))
+                    .font(.callout.weight(model.playbackRate == 1 ? .regular : .semibold))
                     .monospacedDigit()
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(.quaternary, in: .capsule)
-                    .fixedSize()
-                    .help("再生の速さ（再生 ▸ 速さ で変えられます）")
             }
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .fixedSize()
+            .help("再生の速さ（L で速く、K で停止）")
+            .accessibilityLabel("再生の速さ：\(rateLabel(model.playbackRate))")
+            Button {
+                model.isMuted.toggle()
+            } label: {
+                Label(model.isMuted ? "音を出す" : "音を消す", systemImage: model.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .labelStyle(.iconOnly)
+                    .contentTransition(.symbolEffect(.replace))
+                    .font(.body)
+            }
+            .transportButton(model, "mute", size: 26)
+            .help(model.isMuted ? "音を出す（M）" : "音を消す（M）。書き出す動画の音は変わりません")
             boxToggle
         }
     }
@@ -567,10 +670,23 @@ private struct Timeline: View {
             ZStack(alignment: .leading) {
                 // Thin track, thick scene lines: in the same width and a near gray, the lines of a
                 // person not hidden read as part of the track.
+                // One line: gray, and in the color that means "hidden" where something is
+                // hidden with the current choices. A gray stretch is one with nothing hidden.
+                // (A band of its own under the track made two lines to read; a darker played
+                // part would be a third shade.) Not in the original view, which hides nothing.
                 Capsule().fill(.quaternary).frame(height: 4)
-                // The part played, a shade darker: where the playhead is reads at a glance,
-                // also where the knob is over a scene line.
-                Capsule().fill(.tertiary).frame(width: max(4, x(model.playheadTime)), height: 4)
+                if model.viewMode != .original {
+                    ZStack(alignment: .leading) {
+                        ForEach(Array(video.coverRanges.enumerated()), id: \.offset) { _, r in
+                            Rectangle()
+                                .fill(Color.accentColor)
+                                .frame(width: max(2, x(r.upperBound) - x(r.lowerBound)), height: 4)
+                                .offset(x: x(r.lowerBound))
+                        }
+                    }
+                    .frame(width: w, height: 4, alignment: .leading)
+                    .clipShape(.capsule)
+                }
                 if let id = video.focusedPerson, let scenes = video.scenes[id] {
                     let on = video.selected.contains(id)
                     ForEach(Array(scenes.enumerated()), id: \.offset) { _, r in
@@ -632,18 +748,54 @@ private struct Timeline: View {
                     }
                 }
             }
+            // The time marks under the track: a tick and a time at even steps, as many as fit.
+            .overlay(alignment: .topLeading) {
+                let step = Self.rulerStep(duration: duration, width: w)
+                ForEach(Array(stride(from: 0.0, through: duration, by: step)), id: \.self) { t in
+                    VStack(spacing: 1) {
+                        Rectangle().fill(.tertiary).frame(width: 1, height: 4)
+                        Text(Self.rulerLabel(t))
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                    }
+                    // The first and last times stay inside the track's ends.
+                    .position(x: min(max(x(t), 10), max(w - 10, 10)), y: geo.size.height + 9)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+            // Under the pointer: the picture there and its time, above the track (over the
+            // foot of the video, as players do), and above the ▼ when there are any.
             .overlay(alignment: .topLeading) {
                 if let h = model.timelineHover {
-                    Text(formatTime(h))
-                        .font(.caption)
-                        .monospacedDigit()
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.regularMaterial, in: .capsule)
-                        .fixedSize()
-                        // Below the track when the dip markers are above it, not over them.
-                        .position(x: min(max(x(h), 28), max(w - 28, 28)), y: hasDips ? geo.size.height + 10 : -10)
-                        .allowsHitTesting(false)
+                    let shown = model.hoverPicture
+                    let pictureWidth: CGFloat = 168
+                    let pictureHeight = shown.map { pictureWidth * CGFloat($0.height) / CGFloat(max($0.width, 1)) } ?? 0
+                    let half = shown == nil ? 28 : pictureWidth / 2 + 4
+                    VStack(spacing: 4) {
+                        if let shown {
+                            Image(decorative: shown, scale: 1)
+                                .resizable()
+                                .frame(width: pictureWidth, height: min(pictureHeight, 220))
+                                .clipShape(.rect(cornerRadius: 6))
+                        }
+                        Text(formatTime(h))
+                            .font(.caption)
+                            .monospacedDigit()
+                    }
+                    .padding(shown == nil ? 0 : 4)
+                    .padding(.horizontal, shown == nil ? 6 : 0)
+                    .padding(.vertical, shown == nil ? 2 : 0)
+                    .background(.regularMaterial, in: .rect(cornerRadius: shown == nil ? 9 : 10))
+                    .shadow(color: .black.opacity(shown == nil ? 0 : 0.25), radius: 6, y: 2)
+                    .fixedSize()
+                    .position(
+                        x: min(max(x(h), half), max(w - half, half)),
+                        y: -(hasDips ? Self.dipRow : 4) - (shown == nil ? 10 : (min(pictureHeight, 220) + 30) / 2))
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 }
             }
         }
@@ -670,6 +822,23 @@ private struct Timeline: View {
     private var hasDips: Bool { !model.shownDips.isEmpty }
     /// Height of the row of dip markers above the track (and of their click targets).
     static let dipRow: CGFloat = 24
+    /// Height of the time marks under the track.
+    static let rulerRow: CGFloat = 16
+
+    /// Seconds between two time marks: the smallest even step that leaves `spacing` points
+    /// between them.
+    static func rulerStep(duration: Double, width: CGFloat, spacing: CGFloat = 64) -> Double {
+        let steps: [Double] = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
+        let least = duration * Double(spacing) / Double(max(width, 1))
+        return steps.first { $0 >= least } ?? 7200
+    }
+
+    /// "0:30", "1:05:00"; halves of a second as "0:00.5".
+    static func rulerLabel(_ t: Double) -> String {
+        let s = Int(t)
+        let base = s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s % 3600 / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+        return t == t.rounded() ? base : base + ".5"
+    }
 }
 
 /// A transport button: a round patch under the pointer, darker and a little smaller while
@@ -677,6 +846,8 @@ private struct Timeline: View {
 private struct TransportButtonStyle: ButtonStyle {
     let hovered: Bool
     let size: CGFloat
+    /// In effect (playing this way, repeating): the patch stays.
+    var active = false
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
@@ -684,19 +855,22 @@ private struct TransportButtonStyle: ButtonStyle {
             .foregroundStyle(isEnabled ? .primary : .tertiary)
             .frame(width: size, height: size)
             .background(
-                configuration.isPressed ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.quaternary.opacity(hovered && isEnabled ? 1 : 0)),
+                configuration.isPressed ? AnyShapeStyle(.tertiary)
+                    : active ? AnyShapeStyle(.tertiary.opacity(0.8))
+                    : AnyShapeStyle(.quaternary.opacity(hovered && isEnabled ? 1 : 0)),
                 in: .circle)
             .scaleEffect(configuration.isPressed ? 0.92 : 1)
             .contentShape(.circle)
             .animation(.easeOut(duration: 0.12), value: hovered)
+            .animation(.easeOut(duration: 0.12), value: active)
             .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }
 
 private extension View {
     /// `TransportButtonStyle`, with the pointer followed in the model (`hoveredTransport`).
-    func transportButton(_ model: AppModel, _ id: String, size: CGFloat = 30) -> some View {
-        buttonStyle(TransportButtonStyle(hovered: model.hoveredTransport == id, size: size))
+    func transportButton(_ model: AppModel, _ id: String, size: CGFloat = 28, active: Bool = false) -> some View {
+        buttonStyle(TransportButtonStyle(hovered: model.hoveredTransport == id, size: size, active: active))
             .onHover { model.hoveredTransport = $0 ? id : (model.hoveredTransport == id ? nil : model.hoveredTransport) }
     }
 }

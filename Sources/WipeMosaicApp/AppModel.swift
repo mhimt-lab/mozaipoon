@@ -127,6 +127,8 @@ final class AppModel {
     var faceToRemove: RegisteredFace?
     /// The sticker under the pointer in Settings (its delete button shows on hover).
     var hoveredSticker: UUID?
+    /// Settings ▸ スタンプ: the file panel to add images there (not for a person).
+    var importingStickersInSettings = false
 
     // MARK: Videos
     var videos: [VideoItem] = []
@@ -167,16 +169,32 @@ final class AppModel {
     /// Playhead position: where the user is going, else the frame on screen.
     var playheadTime: Double { pendingSeek ?? currentTime }
     var isPlaying = false
+    /// Playing backward (`playReverse`).
+    var isReversing = false
+    /// At the end, play again from the first frame.
+    var loops = false
+    /// The item shown can be played backward.
+    var canPlayReverse: Bool { player.currentItem?.canPlayReverse == true }
     /// Playback speed (1 = normal), kept by every `play()` through `defaultRate`.
     var playbackRate: Float = 1 {
         didSet {
             player.defaultRate = playbackRate
-            if isPlaying { player.rate = playbackRate }
+            if isPlaying { player.rate = isReversing ? -playbackRate : playbackRate }
         }
     }
     static let playbackRates: [Float] = [0.5, 1, 1.5, 2]
     /// Time under the pointer on the timeline (shown in a label while hovering).
-    var timelineHover: Double?
+    var timelineHover: Double? {
+        didSet { if timelineHover != oldValue { updateHoverPicture() } }
+    }
+    /// The picture at `timelineHover` (as the view shows it: hidden where the mosaic view
+    /// hides), once it is made; nil while it is not, and away from the timeline.
+    var hoverPicture: CGImage?
+    @ObservationIgnored private var hoverPictureTask: Task<Void, Never>?
+    /// No sound from the player (kept while the app runs).
+    var isMuted = false {
+        didSet { player.isMuted = isMuted }
+    }
     /// The transport button under the pointer (`TransportButtonStyle`), and whether the
     /// playhead is being dragged (its knob is larger then).
     var hoveredTransport: String?
@@ -280,6 +298,14 @@ final class AppModel {
             }
         }
         player.actionAtItemEnd = .pause
+        // Repeat: at the end of the item shown, from its first frame again.
+        NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: nil, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, self.loops, (note.object as? AVPlayerItem) === self.player.currentItem else { return }
+                self.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                self.player.play()
+            }
+        }
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 30), queue: .main
         ) { [weak self] t in
@@ -290,6 +316,7 @@ final class AppModel {
             Task { @MainActor in
                 guard let self, self.isPlaying != playing else { return }
                 self.isPlaying = playing
+                if !playing { self.isReversing = false }
                 // Paused: make sure the frame on screen has the current mosaic.
                 if !playing { self.redrawIfPaused() }
             }
@@ -1081,6 +1108,7 @@ final class AppModel {
         // The places to check, before writing the file too: found only after it was written,
         // each one meant choosing again and writing again.
         v.liveDips = findDips(frames)
+        v.coverRanges = coveredRanges(frames)
         redrawIfPaused()
     }
 
@@ -1150,6 +1178,32 @@ final class AppModel {
         }
     }
 
+    /// The play button: forward, also while playing backward. (Space is `togglePlay`.)
+    func play() {
+        if isPlaying, !isReversing { return }
+        if isPlaying { player.pause() }
+        isReversing = false
+        togglePlay()
+    }
+
+    /// The stop button and K: stay on the frame shown.
+    func stop() { player.pause() }
+
+    /// J and the button: play backward from the playhead (from the last frame when at the
+    /// first), with the same mosaic as forward.
+    func playReverse() {
+        guard let item = player.currentItem, item.canPlayReverse else { return }
+        if let t = cancelPendingSeek() {
+            player.seek(to: cmTime(t), toleranceBefore: .zero, toleranceAfter: .zero)
+            currentTime = t
+        }
+        if currentTime <= 0.05, item.duration.seconds.isFinite {
+            player.seek(to: item.duration, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        isReversing = true
+        player.rate = -playbackRate
+    }
+
     /// Go to `t` exactly. Seeks are chased (Apple QA1820): one at a time, each to the latest
     /// time asked, so dragging the playhead never queues up seeks behind a slow decoder.
     /// Exact seeks also on long-GOP video: the frame shown must be the one at the playhead, with
@@ -1181,6 +1235,62 @@ final class AppModel {
     /// exact seek then shows the frame before).
     private func cmTime(_ t: Double) -> CMTime {
         CMTime(seconds: t, preferredTimescale: max(600, current?.info?.timeScale ?? 600))
+    }
+
+    /// The stretches of time where something is hidden, for the band under the timeline:
+    /// frames next to each other that hide a face or text, joined.
+    private func coveredRanges(_ frames: [FrameFaces]) -> [ClosedRange<Double>] {
+        var ranges: [ClosedRange<Double>] = []
+        var start: Double?, last = 0.0
+        for (i, f) in frames.enumerated() {
+            let next = i + 1 < frames.count ? frames[i + 1].time : f.time
+            if f.hidesAnything {
+                if start == nil { start = f.time }
+                last = next
+            } else if let s = start {
+                ranges.append(s...max(s, last))
+                start = nil
+            }
+        }
+        if let s = start { ranges.append(s...max(s, last)) }
+        return ranges
+    }
+
+    /// The picture under the pointer on the timeline, made off the main thread: one at a
+    /// time, for the latest time asked. In the mosaic view it goes through the same
+    /// composition as the player, so a small picture never shows what the view hides.
+    private func updateHoverPicture() {
+        hoverPictureTask?.cancel()
+        guard let t = timelineHover, let v = current else {
+            hoverPicture = nil
+            return
+        }
+        let asset: AVAsset? = viewMode == .result ? v.resultItem?.asset : v.asset
+        guard let asset else { return }
+        let composition = viewMode == .mosaic ? v.composition : nil
+        hoverPictureTask = Task { [weak self] in
+            // The pointer passing over: wait for it to rest a moment.
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !Task.isCancelled else { return }
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 480, height: 480)
+            // The frame near the pointer is enough here (an exact one decodes far more).
+            generator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
+            generator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
+            generator.videoComposition = composition
+            guard let image = try? await generator.image(at: CMTime(seconds: t, preferredTimescale: 600)).image,
+                !Task.isCancelled, let self, self.timelineHover == t
+            else { return }
+            self.hoverPicture = image
+        }
+    }
+
+    /// The first frame and the last one (Home and End, and the Play menu).
+    func seekToStart() { seek(to: 0) }
+    func seekToEnd() {
+        guard let d = player.currentItem?.duration.seconds, d.isFinite else { return }
+        seek(to: frameTimes?.last ?? max(0, d - 0.001))
     }
 
     /// L: play, or play faster when already playing (up to 2×).
@@ -1260,10 +1370,14 @@ final class AppModel {
             } else {
                 step(forward ? 1 : -1)
             }
+        case 115: seekToStart()  // Home (fn ←)
+        case 119: seekToEnd()  // End (fn →)
         default:
             switch e.charactersIgnoringModifiers?.lowercased() {
+            case "j": playReverse()
             case "k": player.pause()
             case "l": faster()
+            case "m": isMuted.toggle()
             default: return false
             }
         }
