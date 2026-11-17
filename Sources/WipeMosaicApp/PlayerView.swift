@@ -312,7 +312,7 @@ struct ViewerView: View {
                 ProgressView(value: p)
                     .progressViewStyle(.linear)
                 HStack {
-                    Text("\(Int(p * 100))%")
+                    Text(["\(Int(p * 100))%", remainingLabel(since: video.analysisStarted, fraction: p)].compactMap { $0 }.joined(separator: "・"))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                     Spacer()

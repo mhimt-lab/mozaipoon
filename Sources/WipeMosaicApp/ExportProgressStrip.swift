@@ -7,16 +7,13 @@ struct ExportProgressStrip: View {
 
     var body: some View {
         if let p = model.exportProgress, p.total >= 1 {
-            // The video being written counts by its own progress, so one video's bar moves.
-            let current = model.videos.lazy.compactMap { v -> Double? in
-                if case .writing(let f) = v.job { return f } else { return nil }
-            }.first ?? 0
-            let fraction = min((Double(p.done) + current) / Double(max(p.total, 1)), 1)
+            let fraction = model.exportFraction(p)
+            let left = remainingLabel(since: model.exportStarted, fraction: fraction).map { "・\($0)" } ?? ""
             HStack(spacing: 12) {
                 Label {
                     Text(p.total > 1
-                         ? "書き出し中 \(Int(fraction * 100))%（\(min(p.done + 1, p.total))／\(p.total)本目）"
-                         : "書き出し中 \(Int(fraction * 100))%")
+                         ? "書き出し中 \(Int(fraction * 100))%（\(min(p.done + 1, p.total))／\(p.total)本目）\(left)"
+                         : "書き出し中 \(Int(fraction * 100))%\(left)")
                         .monospacedDigit()
                 } icon: {
                     Image(systemName: "square.and.arrow.up")

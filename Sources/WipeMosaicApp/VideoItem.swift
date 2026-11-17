@@ -250,6 +250,10 @@ final class VideoItem: Identifiable {
         return out
     }
 
+    /// When the search for faces and the reading of text began (for the time left).
+    var analysisStarted: Date?
+    var textStarted: Date?
+
     /// Places to check with the current choices (`findDips`), for the shown video.
     var liveDips: [Dip] = []
 

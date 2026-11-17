@@ -20,6 +20,7 @@ struct ContentView: View {
                 return !urls.isEmpty
             } isTargeted: { model.dropTargeted = $0 }
             .overlay { dropHighlight }
+            .onChange(of: model.dockProgress) { _, p in DockProgress.show(p) }
             .confirmationDialog(
                 "一覧から取り除きますか？",
                 isPresented: Binding(get: { model.pendingRemoval != nil }, set: { if !$0 { model.pendingRemoval = nil } }),

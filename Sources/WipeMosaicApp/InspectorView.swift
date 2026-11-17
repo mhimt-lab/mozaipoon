@@ -561,11 +561,13 @@ private struct MosaicSection: View {
                     if model.current.map({ !model.activeStickers($0).isEmpty }) == true {
                         SliderRow(title: "スタンプの大きさ", value: $model.stickerScale, range: 0.8...2.0, step: 0.05,
                                   low: "小さい", high: "大きい", text: "\(Int((model.stickerScale * 100).rounded()))%",
-                                  note: "顔の写真は、写真の顔を動画の顔に合わせて重ねます。背景を透明にした切り抜き画像がおすすめです。スタンプの周りから、髪型や頭の輪郭は見えます。顔が見つからない場面や、画像から顔が透けるときは、スタンプの下にもモザイク（ぼかし）をかけます。")
+                                  note: "顔の写真は、動画の顔に合わせて重ねます。",
+                                  detail: "背景を透明にした切り抜き画像がおすすめです。スタンプの周りから、髪型や頭の輪郭は見えます。顔が見つからない場面や、画像から顔が透けるときは、スタンプの下にもモザイク（ぼかし）をかけます。")
                     }
                     SliderRow(title: "顔の前後も続ける時間", value: $model.hold, range: 0...3, step: 0.25,
                               low: "0秒", high: "3秒", text: String(format: "%.2g秒", model.hold),
-                              note: "顔が映る前と見えなくなった後も、この時間だけ隠し続けます。横を向いた瞬間に外れるのを防ぎます。")
+                              note: "顔が見える前と後も、この時間だけ隠します。",
+                              detail: "横を向いた瞬間など、顔が一瞬見つからなくなったときにモザイクが外れるのを防ぎます。")
                     SliderRow(title: "\(model.coverStyle == .blur ? "ぼかし" : "モザイク")の広さ", value: $model.pad, range: 0.2...1.0, step: 0.05,
                               low: "狭い", high: "広い", text: "\(Int((model.pad * 100).rounded()))%",
                               note: "広げると、髪や耳まで隠れます。")
@@ -609,10 +611,11 @@ struct CoverStyleRows: View {
                     Text("ぼかし").tag(CoverStyle.blur)
                 }
                 .pickerStyle(.segmented)
-                Text("顔と画面の文字に使います（すべての動画に共通）。人ごとにスタンプを選んだ顔は、スタンプで隠します。")
+                Text("顔と画面の文字に使います。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .help("すべての動画に共通です。人ごとにスタンプを選んだ顔は、スタンプで隠します。")
             }
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -720,7 +723,9 @@ private struct SliderRow: View {
     let low: String
     let high: String
     let text: String
+    /// One short line under the slider; `detail` (more of it) is in the help tag.
     let note: String
+    var detail = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -743,6 +748,7 @@ private struct SliderRow: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .help(detail)
     }
 }
 

@@ -220,6 +220,8 @@ final class AppModel {
     @ObservationIgnored private var exportTask: Task<Void, Never>?
     /// (done, total) of the running export queue.
     var exportProgress: (done: Int, total: Int)?
+    /// When the export in hand began (for the time left).
+    var exportStarted: Date?
 
     private enum Keys {
         static let accuracy = "accuracy", hold = "hold", pad = "pad", autoBlock = "autoBlock", block = "block"
@@ -661,6 +663,7 @@ final class AppModel {
         let id = v.id
         let a = v.asset
         v.state = .running(0)
+        v.analysisStarted = Date()
         analyzingID = id
         analysisTask = Task.detached(priority: .userInitiated) { [weak self] in
             weak let model = self
@@ -711,6 +714,7 @@ final class AppModel {
             selectionChanged(v)
         }
         processQueue()
+        callBackWhenSearched()
     }
 
     private func failAnalysis(_ id: UUID, _ message: String?) {
@@ -867,6 +871,7 @@ final class AppModel {
         let id = v.id
         let a = v.asset
         v.textState = .running(0)
+        v.textStarted = Date()
         textScanningID = id
         textTask = Task.detached(priority: .userInitiated) { [weak self] in
             weak let model = self
@@ -911,6 +916,36 @@ final class AppModel {
             }
         }
         processTextQueue()
+        callBackWhenSearched()
+    }
+
+    /// The searches are done while the app is behind another: the Dock icon bounces once (as
+    /// when an export ends), since the next step is the user's.
+    private func callBackWhenSearched() {
+        guard !NSApp.isActive, !videos.contains(where: \.stillSearching) else { return }
+        NSApp.requestUserAttention(.informationalRequest)
+    }
+
+    /// The work in hand as one number for the Dock icon (`DockProgress`): the export while
+    /// writing, else the searches running; nil when there is none. In steps of 1 %.
+    var dockProgress: Double? {
+        var fraction: Double?
+        if let p = exportProgress {
+            fraction = exportFraction(p)
+        } else {
+            let running = videos.flatMap { [$0.analyzing, $0.textScanning].compactMap { $0 } }
+            if !running.isEmpty { fraction = running.reduce(0, +) / Double(running.count) }
+        }
+        return fraction.map { ($0 * 100).rounded() / 100 }
+    }
+
+    /// How far the export is, over all its videos: the one being written counts by its own
+    /// progress, so the bar moves while one video is written.
+    func exportFraction(_ p: (done: Int, total: Int)) -> Double {
+        let current = videos.lazy.compactMap { v -> Double? in
+            if case .writing(let f) = v.job { return f } else { return nil }
+        }.first ?? 0
+        return min((Double(p.done) + current) / Double(max(p.total, 1)), 1)
     }
 
     private func updateTextMasks() {
@@ -1325,6 +1360,7 @@ final class AppModel {
         if viewMode == .result { viewMode = .mosaic }
         for (v, _, _) in items { v.job = .queued }
         exportProgress = (0, items.count)
+        exportStarted = Date()
         showInspector = true
         exportTask = Task {
             for (k, item) in items.enumerated() {
@@ -1471,6 +1507,18 @@ func formatDuration(_ t: Double) -> String {
     guard t.isFinite else { return "--:--" }
     let s = Int(t.rounded())
     return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+}
+
+/// "残り約2分" for work that began at `start` and is `fraction` done: the time so far in
+/// proportion. Nil for the first seconds and the first few percent, when it would jump about.
+func remainingLabel(since start: Date?, fraction: Double) -> String? {
+    guard let start, fraction >= 0.03, fraction < 1 else { return nil }
+    let elapsed = Date().timeIntervalSince(start)
+    guard elapsed >= 4 else { return nil }
+    let left = elapsed * (1 - fraction) / fraction
+    if left < 10 { return "まもなく終わります" }
+    if left < 60 { return "残り約\(Int((left / 10).rounded(.up)) * 10)秒" }
+    return "残り約\(Int((left / 60).rounded(.up)))分"
 }
 
 func formatSeconds(_ t: Double) -> String {

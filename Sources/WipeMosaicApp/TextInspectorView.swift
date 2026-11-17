@@ -327,7 +327,8 @@ struct TextInspectorView: View {
                 VStack(spacing: 8) {
                     Text("電話番号や名前などを探しています。読み取りはこのMacの中だけで行います。")
                     ProgressView(value: p).frame(maxWidth: 220)
-                    Text("\(Int(p * 100))%").monospacedDigit()
+                    Text(["\(Int(p * 100))%", remainingLabel(since: video.textStarted, fraction: p)].compactMap { $0 }.joined(separator: "・"))
+                        .monospacedDigit()
                 }
             } actions: {
                 Button("中止") { model.cancelTextScan() }
