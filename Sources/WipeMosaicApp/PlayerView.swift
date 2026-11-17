@@ -436,12 +436,16 @@ private struct TransportBar: View {
                 }
             }
             .font(.title3)
+            // The lines under the track start and end where the track does (it is half a knob
+            // inside the bar's padding).
+            .padding(.horizontal, Timeline.knobRest)
             // Always one line, so the video does not grow and shrink as a person is chosen.
             caption
                 .lineLimit(1)
                 .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, Timeline.knobRest)
         }
     }
 
@@ -666,7 +670,16 @@ private struct Timeline: View {
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
-            let x = { (t: Double) in CGFloat(min(max(t / duration, 0), 1)) * w }
+            // One mapping for the track, the knob, the marks above, the time marks below and the
+            // pointer. The track runs from the first frame to the last and no further: its
+            // ends, the middle of the knob at either end, and the first and last time marks are
+            // on one vertical line. The frame is half a knob wider at each side, for the knob
+            // at the ends. (The track went past the last time mark, as if there were time
+            // after it, and the end marks stood beside the knob.)
+            let inset = Self.knobRest
+            let span = max(w - 2 * inset, 1)
+            let x = { (t: Double) in inset + CGFloat(min(max(t / duration, 0), 1)) * span }
+            let time = { (px: CGFloat) in Double(min(max((px - inset) / span, 0), 1)) * duration }
             ZStack(alignment: .leading) {
                 // Thin track, thick scene lines: in the same width and a near gray, the lines of a
                 // person not hidden read as part of the track.
@@ -674,18 +687,20 @@ private struct Timeline: View {
                 // hidden with the current choices. A gray stretch is one with nothing hidden.
                 // (A band of its own under the track made two lines to read; a darker played
                 // part would be a third shade.) Not in the original view, which hides nothing.
-                Capsule().fill(.quaternary).frame(height: 4)
+                Capsule().fill(.quaternary).frame(width: span, height: 4).offset(x: inset)
                 if model.viewMode != .original {
                     ZStack(alignment: .leading) {
                         ForEach(Array(video.coverRanges.enumerated()), id: \.offset) { _, r in
+                            let from = x(r.lowerBound) - inset, to = x(r.upperBound) - inset
                             Rectangle()
                                 .fill(Color.accentColor)
-                                .frame(width: max(2, x(r.upperBound) - x(r.lowerBound)), height: 4)
-                                .offset(x: x(r.lowerBound))
+                                .frame(width: max(2, to - from), height: 4)
+                                .offset(x: from)
                         }
                     }
-                    .frame(width: w, height: 4, alignment: .leading)
+                    .frame(width: span, height: 4, alignment: .leading)
                     .clipShape(.capsule)
+                    .offset(x: inset)
                 }
                 if let id = video.focusedPerson, let scenes = video.scenes[id] {
                     let on = video.selected.contains(id)
@@ -710,11 +725,11 @@ private struct Timeline: View {
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { g in
                 model.scrubbing = true
-                model.seek(to: Double(min(max(g.location.x / max(w, 1), 0), 1)) * duration)
+                model.seek(to: time(g.location.x))
             }.onEnded { _ in model.scrubbing = false })
             .onContinuousHover { phase in
                 switch phase {
-                case .active(let p): model.timelineHover = Double(min(max(p.x / max(w, 1), 0), 1)) * duration
+                case .active(let p): model.timelineHover = time(p.x)
                 case .ended: model.timelineHover = nil
                 }
             }
@@ -760,8 +775,8 @@ private struct Timeline: View {
                             .foregroundStyle(.secondary)
                             .fixedSize()
                     }
-                    // The first and last times stay inside the track's ends.
-                    .position(x: min(max(x(t), 10), max(w - 10, 10)), y: geo.size.height + 9)
+                    // Each exactly under its time on the track.
+                    .position(x: x(t), y: geo.size.height + 9)
                 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
@@ -822,6 +837,8 @@ private struct Timeline: View {
     private var hasDips: Bool { !model.shownDips.isEmpty }
     /// Height of the row of dip markers above the track (and of their click targets).
     static let dipRow: CGFloat = 24
+    /// Half the knob at rest: the room at each side of the track for the knob at its ends.
+    static let knobRest: CGFloat = 7
     /// Height of the time marks under the track.
     static let rulerRow: CGFloat = 16
 
